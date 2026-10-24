@@ -14,6 +14,7 @@ import {
 } from './views/clustersTreeProvider';
 import { ClusterDocumentProvider } from './views/clusterDocuments';
 import { ClusterStatusBar } from './views/clusterStatusBar';
+import { ClustersAutoRefresh } from './views/clustersAutoRefresh';
 import { Telemetry } from './util/telemetry';
 import { DiagnosticEventsPanel } from './views/diagnosticEventsPanel';
 import { ServiceFabricDebugConfigurationProvider, attachToDeployedService } from './debug/attachCommand';
@@ -142,6 +143,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	context.subscriptions.push(clusterDocuments);
 	const statusBar = new ClusterStatusBar(connections, localCluster, logger);
 	context.subscriptions.push(statusBar);
+	context.subscriptions.push(new ClustersAutoRefresh(connections, localCluster, clustersTree, clustersView));
 
 	const telemetry = new Telemetry(logger);
 	context.subscriptions.push(telemetry);

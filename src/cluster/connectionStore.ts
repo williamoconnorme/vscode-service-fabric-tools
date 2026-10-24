@@ -56,9 +56,11 @@ export class ConnectionStore implements vscode.Disposable {
 		this.emitter.fire();
 	}
 
-	async upsert(conn: ClusterConnection): Promise<void> {
+	/** Saves `conn`. With `ifChanged`, an identical saved connection is left alone and no change event fires. */
+	async upsert(conn: ClusterConnection, opts: { ifChanged?: boolean } = {}): Promise<void> {
 		const all = this.list();
 		const idx = all.findIndex((c) => c.id === conn.id);
+		if (opts.ifChanged && idx >= 0 && JSON.stringify(all[idx]) === JSON.stringify(conn)) return;
 		if (idx >= 0) all[idx] = conn;
 		else all.push(conn);
 		await this.context.workspaceState.update(STORE_KEY, all);

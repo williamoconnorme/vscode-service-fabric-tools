@@ -1261,6 +1261,12 @@
                     "default": true,
                     "description": "Prompt before Remove / Reset Local Cluster operations."
                 },
+                "serviceFabric.clusters.autoRefreshSeconds": {
+                    "type": "number",
+                    "default": 30,
+                    "minimum": 0,
+                    "markdownDescription": "How often the **Clusters** view re-probes saved clusters and reloads expanded applications, partitions, replicas and nodes, in seconds. Only runs while the view is visible and the window is focused; clusters you disconnected are skipped. `0` turns it off."
+                },
                 "serviceFabric.tree.showDeploymentStatus": {
                     "type": "boolean",
                     "default": true,

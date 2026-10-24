@@ -128,6 +128,8 @@ Local Cluster
 
 Icons are coloured by health state (green `Ok`, yellow `Warning`, red `Error`) and each row's description shows status, kind and placement (for example `Primary • Ready • _Node_2`). Hover for the full record. Groups and entities carry an inline **Refresh** button; the view's toolbar **Refresh Clusters** re-probes every saved connection.
 
+**Auto-refresh.** While the Clusters view is visible and the VS Code window is focused, the view re-probes saved clusters every `serviceFabric.clusters.autoRefreshSeconds` (default `30`; `0` turns it off) and reloads the rows you have expanded, so application, service, partition, replica and node states stay current. Collapsed branches aren't fetched, clusters you disconnected are skipped, and expanded rows stay expanded when their labels change. It also runs straight away when the view becomes visible or the window regains focus.
+
 **Filtering and sorting.** The funnel button in the view's title bar opens a **Filter** menu. **Filter and Sort…** opens a multi-select picker with every option; the individual toggles **Hide Healthy**, **Hide Warning**, **Hide Unhealthy** (health `Error`), **Hide Completed Repair Jobs** and **Sort by Health (Unhealthy First)** can also be flipped one at a time, and **Clear Filters** resets everything. Sorting by health orders every list `Error` → `Warning` → `Ok` → rows without a health state, keeping the gateway's order within each band. Hidden rows are replaced by a single `N hidden by filter` note at the end of each list (click it to clear the filter), group counts stay unfiltered, and the active filter is shown next to the view title. Rows without a health state (application types, code packages) are never hidden. The filter is remembered per workspace. The same commands are in the palette under **Service Fabric: Clusters View: …**.
 
 Right-click menus follow the entity:
@@ -799,6 +801,7 @@ Idempotent — running it twice is safe; the second run reports zero consumers u
 | `serviceFabric.powerShell.executable` | `auto` | `auto` (Windows PowerShell on Windows), `pwsh`, or `powershell`. The SDK's PowerShell module only exists on Windows; on macOS / Linux Publish and Remove use the REST engine. |
 | `serviceFabric.clientCertificates` | `{}` | Client certificate files for X.509-secured clusters, keyed by the publish profile's `FindValue` (thumbprint, or subject name for `FindBySubjectName`). Values are `.pfx`/`.p12` or PEM paths; `~` expands to the home folder. Used by the REST engine. Passphrases are kept in SecretStorage. See §8.4. |
 | `serviceFabric.confirmDestructiveActions` | `true` | Confirm before Remove / Reset Local Cluster. |
+| `serviceFabric.clusters.autoRefreshSeconds` | `30` | Clusters view auto-refresh interval while the view is visible and the window focused. `0` turns it off. See §3.2. |
 | `serviceFabric.tree.showDeploymentStatus` | `true` | Badge applications that are deployed on the active cluster. |
 | `serviceFabric.diagnostics.enableManifestRules` | `true` | Enable `SFD00x` rules. |
 | `serviceFabric.diagnostics.enableSchemaValidation` | `true` | Enable `SFXxxx` schema validation. Completion and hover stay on. See §4.1. |

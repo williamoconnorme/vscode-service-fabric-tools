@@ -44,8 +44,10 @@ export class LocalClusterManager {
 	 * Probes the cluster, stores the updated connection and returns it. Never throws for probe failures.
 	 * `interactive` lets an Entra ID cluster prompt for sign-in; background refreshes leave it off.
 	 * A cluster the user disconnected is only probed (and reconnected) by an interactive refresh.
+	 * `background` (timers) only saves, and so only redraws the Clusters view, when something changed.
 	 */
-	async refresh(conn: ClusterConnection, opts: { interactive?: boolean } = {}): Promise<ClusterConnection> {
+	async refresh(conn: ClusterConnection, opts: { interactive?: boolean; background?: boolean } = {}): Promise<ClusterConnection> {
+		const save = { ifChanged: opts.background };
 		if (conn.userDisconnected && !opts.interactive) return conn;
 		const client = createClientForConnection(conn, opts);
 		try {
@@ -60,11 +62,14 @@ export class LocalClusterManager {
 				deployedApplications: apps,
 				nodes,
 			};
-			this.logger.info(`Cluster ${conn.endpoint} health=${health.aggregatedHealthState} nodes=${nodes.length} apps=${apps.length}`);
-			await this.store.upsert(updated);
+			if (!opts.background || !conn.connected || conn.aggregatedHealthState !== health.aggregatedHealthState) {
+				this.logger.info(`Cluster ${conn.endpoint} health=${health.aggregatedHealthState} nodes=${nodes.length} apps=${apps.length}`);
+			}
+			await this.store.upsert(updated, save);
 			return updated;
 		} catch (err) {
-			this.logger.warn(`Cluster probe failed: ${(err as Error).message}`);
+			// Timers would repeat the same failure every tick; log it once, when the cluster becomes unreachable.
+			if (!opts.background || conn.connected) this.logger.warn(`Cluster probe failed: ${(err as Error).message}`);
 			const disconnected: ClusterConnection = {
 				...conn,
 				connected: false,
@@ -73,7 +78,7 @@ export class LocalClusterManager {
 				nodes: [],
 				aggregatedHealthState: undefined,
 			};
-			await this.store.upsert(disconnected);
+			await this.store.upsert(disconnected, save);
 			return disconnected;
 		}
 	}

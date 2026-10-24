@@ -106,6 +106,8 @@ export class ClusterTreeItem extends vscode.TreeItem {
 		super(label, collapsibleState);
 		this.entity = entity;
 		this.appName = entity.appName;
+		// A stable id keeps the row's expansion state when a refresh changes its label (group counts).
+		if (connection && kind !== 'message') this.id = clusterItemId(kind, connection.id, entity);
 		switch (kind) {
 			case 'cluster':
 				// Connected: coloured by health. Disconnected: a dimmed "disconnected" icon.
@@ -180,6 +182,28 @@ export class ClusterTreeItem extends vscode.TreeItem {
 		if (icon instanceof vscode.ThemeIcon) this.iconPath = new vscode.ThemeIcon(icon.id, healthColor(healthState));
 		return this;
 	}
+}
+
+/**
+ * Tree item id from the fields that identify an entity, leaving out ones that change while
+ * it exists (status, health, versions, pids), so a row keeps its id across refreshes.
+ */
+export function clusterItemId(kind: ClusterNodeKind, connectionId: string, e: ClusterEntityRef): string {
+	const parts = [
+		e.group,
+		kind === 'appType' || kind === 'appTypeVersion' ? e.typeName : undefined,
+		kind === 'appTypeVersion' ? e.typeVersion : undefined,
+		e.appId,
+		e.serviceId,
+		e.partitionId,
+		e.replicaId,
+		e.nodeName,
+		e.serviceManifestName,
+		e.servicePackageActivationId,
+		e.codePackageName,
+		e.repairTaskId,
+	];
+	return [connectionId, kind, ...parts.map((p) => p ?? '')].join('|');
 }
 
 const GROUP_ICONS: Record<ClusterGroupKind, string> = {
@@ -284,6 +308,9 @@ export function passesFilter(item: ClusterTreeItem, filter: ClusterTreeFilter): 
 /** Request timeout for tree expansions; long enough for a slow remote gateway, short enough to not hang the view. */
 const TREE_TIMEOUT_MS = 10000;
 
+/** Store changes within this window share one redraw. */
+const REDRAW_DEBOUNCE_MS = 100;
+
 /**
  * Tree data for the `serviceFabric.clusters` view. Saved connections come from the
  * {@link ConnectionStore}; everything beneath a cluster is fetched from the gateway
@@ -301,7 +328,18 @@ export class ClustersTreeProvider implements vscode.TreeDataProvider<ClusterTree
 		private readonly state?: vscode.Memento,
 	) {
 		this.filter = { ...EMPTY_FILTER, ...(state?.get<Partial<ClusterTreeFilter>>(FILTER_STATE_KEY) ?? {}) };
-		store.onDidChange(() => this.emitter.fire(undefined));
+		store.onDidChange(() => this.scheduleRedraw());
+	}
+
+	private redrawTimer: ReturnType<typeof setTimeout> | undefined;
+
+	/** Coalesces bursts of store changes (one per probed cluster) into one redraw. */
+	private scheduleRedraw(): void {
+		if (this.redrawTimer) return;
+		this.redrawTimer = setTimeout(() => {
+			this.redrawTimer = undefined;
+			this.emitter.fire(undefined);
+		}, REDRAW_DEBOUNCE_MS);
 	}
 
 	getFilter(): ClusterTreeFilter {
@@ -335,7 +373,8 @@ export class ClustersTreeProvider implements vscode.TreeDataProvider<ClusterTree
 
 	/** Re-fetches `element` and its descendants, or the whole tree when omitted. */
 	refresh(element?: ClusterTreeItem): void {
-		if (element && element.kind !== 'cluster') element.children = undefined;
+		if (!element) return this.scheduleRedraw();
+		if (element.kind !== 'cluster') element.children = undefined;
 		this.emitter.fire(element);
 	}
 

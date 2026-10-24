@@ -63,7 +63,7 @@ export class ClusterStatusBar implements vscode.Disposable {
 		const active = this.store.getActive();
 		if (!active || active.kind !== 'local') return;
 		try {
-			await this.local.refresh(active);
+			await this.local.refresh(active, { background: true });
 		} catch (err) {
 			this.logger.debug(`Status poll failed: ${(err as Error).message}`);
 		}
