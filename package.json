@@ -1144,12 +1144,12 @@
                         "rest"
                     ],
                     "enumDescriptions": [
-                        "PowerShell on Windows, REST elsewhere.",
-                        "Deploy-FabricApplication.ps1 via the Service Fabric SDK (Windows only).",
+                        "REST on every platform.",
+                        "Deploy-FabricApplication.ps1 via the Service Fabric SDK (Windows only), as Visual Studio does.",
                         "Upload, provision and create/upgrade over the cluster's HTTP gateway. No Service Fabric SDK required."
                     ],
                     "default": "auto",
-                    "markdownDescription": "How Publish / Remove talk to the cluster. `auto`: PowerShell (`Deploy-FabricApplication.ps1`, same as Visual Studio) on Windows, REST elsewhere. `rest`: the extension uploads, provisions and creates/upgrades the application over the HTTP gateway — no Service Fabric SDK required. The REST engine needs a cluster whose image store is `fabric:ImageStore`."
+                    "markdownDescription": "How Publish / Remove talk to the cluster. `auto` / `rest`: the extension uploads, provisions and creates/upgrades the application over the HTTP gateway; no PowerShell or Service Fabric SDK needed. It requires a cluster whose image store is `fabric:ImageStore` (the default). `powershell`: runs the project's `Deploy-FabricApplication.ps1` through the SDK's PowerShell module, as Visual Studio does (Windows only). Use it for `xstore:` image stores or a customised deploy script; it also needs the cluster's client TCP port (usually 19000) to be reachable."
                 },
                 "serviceFabric.deploy.overwriteBehavior": {
                     "type": "string",

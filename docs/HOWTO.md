@@ -33,8 +33,8 @@ This guide walks through every feature of the **Service Fabric Tools** extension
 |---|---|
 | Authoring (tree, manifest validation, F12, code actions) | VS Code 1.90+. No other extensions. Cross-platform. |
 | Build / Package | **Windows:** Visual Studio 2022 **or** Build Tools for VS 2022 with the *Azure development* workload + *Service Fabric Tools* component. **macOS / Linux:** the .NET SDK (8 or later); the extension falls back to `dotnet msbuild`. `.NET Framework` services can't be built off Windows. |
-| Deploy / Remove — PowerShell engine | Windows. Service Fabric SDK (the `ServiceFabricSDK` PowerShell module is installed by the SDK setup). The default on Windows. |
-| Deploy / Remove — REST engine | Any OS. Only network access to the cluster's HTTP gateway (default port 19080); no Service Fabric SDK. The default on macOS / Linux. The cluster's image store must be `fabric:ImageStore`. See §8.4. |
+| Deploy / Remove — PowerShell engine | Windows. Service Fabric SDK (the `ServiceFabricSDK` PowerShell module is installed by the SDK setup), and the cluster's client TCP port (usually 19000) must be reachable. Opt-in with `serviceFabric.deploy.engine: "powershell"`. |
+| Deploy / Remove — REST engine | Any OS. Only network access to the cluster's HTTP gateway (default port 19080); no PowerShell or Service Fabric SDK. The default on every OS. The cluster's image store must be `fabric:ImageStore`. See §8.4. |
 | Local dev cluster | Windows. Service Fabric SDK (provides `FabricHostSvc` and the `Microsoft.ServiceFabric.ClusterSetup` PS modules). On macOS / Linux see §6.4. |
 | Debug attach | Windows, with the service running on this machine (local cluster). `ms-dotnettools.csharp` (or another CoreCLR debug adapter) for `.NET`; classic CLR debugger for `.NET Framework` services. |
 
@@ -332,8 +332,8 @@ The status-bar item, **Service Fabric: Select Active Cluster**, and the **Cluste
 1. Right-click a `.sfproj` → **Publish Application…**, or run **Service Fabric: Publish Application…** from the command palette.
 2. Pick a publish profile from `PublishProfiles\\*.xml`, or one of your saved clusters (see *Publishing to a saved cluster* below). With a single profile and no saved clusters, the profile is used without asking.
 3. The extension restores, packages, and then deploys with the engine chosen by **`serviceFabric.deploy.engine`**:
-   - **PowerShell** (default on Windows): invokes `Deploy-FabricApplication.ps1` from the project's `Scripts` folder, exactly as Visual Studio does.
-   - **REST** (default on macOS / Linux; opt-in on Windows with `"rest"`): uploads, provisions and creates/upgrades the application over the HTTP gateway. See §8.4.
+   - **REST** (the default, `auto`, on every OS): uploads, provisions and creates/upgrades the application over the HTTP gateway. No PowerShell or Service Fabric SDK is needed. See §8.4.
+   - **PowerShell** (opt-in with `"powershell"`, Windows only): invokes `Deploy-FabricApplication.ps1` from the project's `Scripts` folder, exactly as Visual Studio does. Use it for `xstore:` image stores or a customised deploy script. It connects through the cluster's client TCP port (usually 19000), so it fails with *Could not ping any of the provided Service Fabric gateway endpoints* when only the HTTP gateway is reachable (for example, a gateway on port 443).
 4. Output streams live to the **Service Fabric** output channel. Errors are surfaced as a toast.
 
 The connection sent to the script matches the active cluster — for local clusters it's a no-creds call; for remote clusters it includes the server thumbprint and (if supplied) client thumbprint.
@@ -440,11 +440,11 @@ With the REST engine, Remove does the same over the gateway. It force-deletes ev
 
 The deploy uploads the contents of `pkg\\<Configuration>\\<ApplicationTypeName>` (output of the `Package` target). Publish always runs **Package** first.
 
-### 8.4 Publishing from macOS / Linux (REST engine)
+### 8.4 The REST engine
 
 The REST engine reproduces `Publish-NewServiceFabricApplication` / `Publish-UpgradedServiceFabricApplication` with gateway calls, so the same publish profile works from any OS:
 
-1. **Image store check.** Reads `ImageStoreConnectionString` from the cluster manifest. Only `fabric:ImageStore` (the default for Azure clusters) can be uploaded to over HTTP. For `file:` or `xstore:` stores Publish stops with a message suggesting the PowerShell engine on Windows or `sfctl application upload`.
+1. **Image store check.** Reads `ImageStoreConnectionString` from the cluster manifest. Only `fabric:ImageStore` (the default for Azure clusters) can be uploaded to over HTTP. For `file:` or `xstore:` stores Publish stops with a message suggesting the PowerShell engine (Windows) or `sfctl application upload`.
 2. **Decide.** If the type version isn't registered, upload and provision it. If the application doesn't exist, create it. If it exists at the same version, apply **`serviceFabric.deploy.overwriteBehavior`** (default `SameAppTypeAndVersion`: delete the application, re-register the version, recreate). If it exists at an older version, upgrade when the profile has `<UpgradeDeployment Enabled="true">`; otherwise `Always` replaces it and the other values fail with an explanation.
 3. **Upload** to `/ImageStore/<Type>_<Version>_<random>`, four files at a time. Files over 4 MB go in 4 MB chunks through an upload session. The progress notification is cancellable. The overall time limit is the profile's `CopyPackageTimeoutSec`, else `serviceFabric.deploy.copyPackageTimeoutSec` (600 s). `CompressPackage` isn't supported yet; the package is uploaded uncompressed.
 4. **Provision**, then **create** or **upgrade**. For upgrades, the profile's `<UpgradeDeployment Mode>` and `<Parameters>` (`FailureAction`, `HealthCheck*Sec`, `UpgradeDomainTimeoutSec`, `UpgradeTimeoutSec`, `UpgradeReplicaSetCheckTimeoutSec`, `ForceRestart`, `ConsiderWarningAsError`, `MaxPercentUnhealthyDeployedApplications`, `DefaultServiceTypeHealthPolicy`) map onto the REST upgrade description. Unsupported keys are logged and ignored. Upgrade-domain progress streams to the output channel, and a rollback is reported as a failure.

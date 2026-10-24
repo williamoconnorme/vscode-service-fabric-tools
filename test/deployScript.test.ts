@@ -74,7 +74,8 @@ test('resolveApplicationName: parameter file name wins, else the type name witho
 });
 
 test('resolveDeployEngine', () => {
-	assert.deepEqual(resolveDeployEngine('auto', 'win32'), { engine: 'powershell' });
+	assert.deepEqual(resolveDeployEngine('auto', 'win32'), { engine: 'rest' });
+	assert.deepEqual(resolveDeployEngine(undefined, 'win32'), { engine: 'rest' });
 	assert.deepEqual(resolveDeployEngine(undefined, 'darwin'), { engine: 'rest' });
 	assert.deepEqual(resolveDeployEngine('rest', 'win32'), { engine: 'rest' });
 	assert.deepEqual(resolveDeployEngine('powershell', 'win32'), { engine: 'powershell' });
