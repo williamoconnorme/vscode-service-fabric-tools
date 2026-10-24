@@ -36,6 +36,8 @@ import {
 	connectRemoteCluster,
 	disconnectCluster,
 	openClusterExplorer,
+	reconnectCluster,
+	removeCluster,
 	resetLocalCluster,
 	selectActiveCluster,
 	startLocalCluster,
@@ -70,7 +72,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	logger.info(`Service Fabric extension activating on ${process.platform}`);
 
 	const projects = new SfProjectWatcher(logger);
-	await projects.initialize();
 	context.subscriptions.push(projects);
 
 	const applicationsTree = new ApplicationsTreeProvider(projects);
@@ -78,6 +79,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		treeDataProvider: applicationsTree,
 	});
 	context.subscriptions.push(applicationsView);
+	// Until the first scan finishes the view shows "Looking for…" instead of "No projects found".
+	await vscode.window.withProgress({ location: { viewId: 'serviceFabric.applications' } }, () => projects.initialize());
+	await vscode.commands.executeCommand('setContext', 'serviceFabric.projectsScanned', true);
 
 	registerClientCertManager(new ClientCertManager(context.secrets, logger));
 	const connections = new ConnectionStore(context);
@@ -253,7 +257,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		['serviceFabric.cluster.connectLocal', () => connectLocalCluster(localCluster)],
 		['serviceFabric.cluster.connectRemote', () => connectRemoteCluster(connections, localCluster, logger)],
 		['serviceFabric.cluster.disconnect', (node?: ClusterTreeItem) => disconnectCluster(connections, node?.connection)],
-		['serviceFabric.cluster.remove', (node?: ClusterTreeItem) => disconnectCluster(connections, node?.connection)],
+		['serviceFabric.cluster.reconnect', (node?: ClusterTreeItem) => reconnectCluster(connections, localCluster, node?.connection)],
+		[
+			'serviceFabric.cluster.remove',
+			(node?: ClusterTreeItem) => {
+				// The Delete keybinding passes no item: use the selected cluster row, and ignore other rows.
+				const selected = node ?? clustersView.selection[0];
+				if (selected && selected.kind !== 'cluster') return;
+				return removeCluster(connections, selected?.connection);
+			},
+		],
 		[
 			'serviceFabric.cluster.changeClientCertificate',
 			(node?: Pick<ClusterTreeItem, 'connection'>) => changeClientCertificate(connections, localCluster, logger, node?.connection),

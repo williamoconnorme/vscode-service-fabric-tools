@@ -16,6 +16,8 @@ export interface ClusterConnection {
 	endpoint: string;
 	kind: ClusterKind;
 	connected: boolean;
+	/** Set by Disconnect: background refreshes leave the cluster alone until an interactive refresh (Reconnect). */
+	userDisconnected?: boolean;
 	aggregatedHealthState?: string;
 	deployedApplications?: DeployedApplicationInfo[];
 	nodes?: ClusterNodeInfo[];

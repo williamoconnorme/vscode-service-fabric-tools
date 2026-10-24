@@ -107,12 +107,23 @@
             },
             {
                 "view": "serviceFabric.applications",
+                "contents": "Looking for Service Fabric application projects (.sfproj)…",
+                "when": "workspaceFolderCount > 0 && !serviceFabric.projectsScanned"
+            },
+            {
+                "view": "serviceFabric.applications",
                 "contents": "No Service Fabric application projects (.sfproj) found in the current workspace.\n[Create New Application](command:serviceFabric.createApplication)",
-                "when": "workspaceFolderCount > 0"
+                "when": "workspaceFolderCount > 0 && serviceFabric.projectsScanned"
             },
             {
                 "view": "serviceFabric.clusters",
-                "contents": "No Service Fabric clusters configured.\n[Connect to Local Cluster](command:serviceFabric.cluster.connectLocal)\n[Connect to Remote Cluster…](command:serviceFabric.cluster.connectRemote)"
+                "contents": "No Service Fabric clusters configured.\n[Connect to Local Cluster](command:serviceFabric.cluster.connectLocal)\n[Connect to Remote Cluster…](command:serviceFabric.cluster.connectRemote)",
+                "when": "isWindows"
+            },
+            {
+                "view": "serviceFabric.clusters",
+                "contents": "No Service Fabric clusters configured. The local dev cluster needs Windows; connect to a remote cluster through its HTTP gateway.\n[Connect to Remote Cluster…](command:serviceFabric.cluster.connectRemote)",
+                "when": "!isWindows"
             }
         ],
         "commands": [
@@ -195,8 +206,14 @@
                 "icon": "$(debug-disconnect)"
             },
             {
+                "command": "serviceFabric.cluster.reconnect",
+                "title": "Reconnect",
+                "category": "Service Fabric",
+                "icon": "$(plug)"
+            },
+            {
                 "command": "serviceFabric.cluster.remove",
-                "title": "Remove Cluster",
+                "title": "Remove Cluster…",
                 "category": "Service Fabric",
                 "icon": "$(trash)"
             },
@@ -510,6 +527,14 @@
                 "category": "Service Fabric"
             }
         ],
+        "keybindings": [
+            {
+                "command": "serviceFabric.cluster.remove",
+                "key": "delete",
+                "mac": "cmd+backspace",
+                "when": "focusedView == serviceFabric.clusters && !inputFocus"
+            }
+        ],
         "menus": {
             "view/title": [
                 {
@@ -610,9 +635,24 @@
                     "group": "inline"
                 },
                 {
+                    "command": "serviceFabric.cluster.reconnect",
+                    "when": "view == serviceFabric.clusters && viewItem == cluster.disconnected",
+                    "group": "inline@0"
+                },
+                {
                     "command": "serviceFabric.cluster.remove",
                     "when": "view == serviceFabric.clusters && viewItem == cluster.disconnected",
-                    "group": "inline"
+                    "group": "inline@1"
+                },
+                {
+                    "command": "serviceFabric.cluster.disconnect",
+                    "when": "view == serviceFabric.clusters && viewItem == cluster.connected",
+                    "group": "5_connection@0"
+                },
+                {
+                    "command": "serviceFabric.cluster.reconnect",
+                    "when": "view == serviceFabric.clusters && viewItem == cluster.disconnected",
+                    "group": "5_connection@0"
                 },
                 {
                     "command": "serviceFabric.cluster.remove",
@@ -631,7 +671,7 @@
                 },
                 {
                     "command": "serviceFabric.cluster.refreshNode",
-                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.(connected|disconnected|group\\.|appType$|app$|service\\.|partition\\.|node\\.|deployedApp$|deployedServicePackage$)/",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.(connected|group\\.|appType$|app$|service\\.|partition\\.|node\\.|deployedApp$|deployedServicePackage$)/",
                     "group": "inline"
                 },
                 {
@@ -959,6 +999,10 @@
                 },
                 {
                     "command": "serviceFabric.cluster.deleteRepairTask",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.debug.autoAttachNext",
                     "when": "false"
                 },
                 {

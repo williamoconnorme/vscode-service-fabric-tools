@@ -346,7 +346,9 @@ export class ClustersTreeProvider implements vscode.TreeDataProvider<ClusterTree
 	async getChildren(element?: ClusterTreeItem): Promise<ClusterTreeItem[]> {
 		if (!element) {
 			return this.store.list().map((conn) => {
-				const item = new ClusterTreeItem('cluster', conn.label, vscode.TreeItemCollapsibleState.Collapsed, conn);
+				// A disconnected cluster has nothing to load; Reconnect redraws it as expandable.
+				const state = conn.connected ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None;
+				const item = new ClusterTreeItem('cluster', conn.label, state, conn);
 				item.description = describeCluster(conn);
 				item.tooltip = clusterTooltip(conn);
 				return item;
@@ -884,7 +886,7 @@ function escapeRegExp(text: string): string {
 
 /** Node and application counts; the endpoint is in the tooltip, and the icon shows connection state and health. */
 function describeCluster(conn: ClusterConnection): string {
-	if (!conn.connected) return '';
+	if (!conn.connected) return conn.userDisconnected ? 'disconnected' : 'unreachable';
 	const nodeCount = conn.nodes?.length ?? 0;
 	const appCount = conn.deployedApplications?.length ?? 0;
 	return `${nodeCount}-node • ${appCount} app${appCount === 1 ? '' : 's'}`;
@@ -900,7 +902,7 @@ function clusterTooltip(conn: ClusterConnection): string {
 		lines.push(`Nodes: ${conn.nodes?.length ?? 0}`);
 		lines.push(`Applications: ${conn.deployedApplications?.length ?? 0}`);
 	} else {
-		lines.push('Disconnected');
+		lines.push(conn.userDisconnected ? 'Disconnected. Use Reconnect to connect again.' : 'Unreachable. Use Reconnect to try again.');
 	}
 	return lines.join('\n');
 }

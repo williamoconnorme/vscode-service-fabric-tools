@@ -43,10 +43,19 @@ export class ClusterStatusBar implements vscode.Disposable {
 			tooltip.push(`Nodes: ${nodeCount}`);
 			tooltip.push(`Applications: ${active.deployedApplications?.length ?? 0}`);
 		} else {
-			tooltip.push('Disconnected');
+			tooltip.push(active.userDisconnected ? 'Disconnected' : 'Unreachable');
 		}
 		tooltip.push('Click to switch cluster');
 		this.item.tooltip = tooltip.join('\n');
+		// Highlight problems, but not a cluster the user chose to disconnect.
+		const unreachable = !active.connected && !active.userDisconnected;
+		const health = active.connected ? active.aggregatedHealthState : undefined;
+		this.item.backgroundColor =
+			health === 'Error'
+				? new vscode.ThemeColor('statusBarItem.errorBackground')
+				: unreachable || health === 'Warning'
+					? new vscode.ThemeColor('statusBarItem.warningBackground')
+					: undefined;
 		this.item.show();
 	}
 

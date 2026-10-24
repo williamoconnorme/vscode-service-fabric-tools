@@ -171,24 +171,88 @@ export async function reportClusterAuthFailure(err: unknown, connection: Cluster
 	return true;
 }
 
-/** `serviceFabric.cluster.disconnect` / `serviceFabric.cluster.remove`: removes the given (or active) connection. */
+/**
+ * `serviceFabric.cluster.disconnect`: marks the given (or active) connection as disconnected
+ * and keeps it saved, so Reconnect can restore it with its security settings.
+ */
 export async function disconnectCluster(store: ConnectionStore, connection?: ClusterConnection): Promise<void> {
 	const target = connection ?? store.getActive();
-	if (target) await store.remove(target.id);
+	if (!target) return;
+	await store.upsert({
+		...target,
+		connected: false,
+		userDisconnected: true,
+		deployedApplications: [],
+		nodes: [],
+		aggregatedHealthState: undefined,
+	});
+}
+
+/** `serviceFabric.cluster.reconnect`: probes the given (or a picked) connection again, signing in if needed. */
+export async function reconnectCluster(store: ConnectionStore, local: LocalClusterManager, connection?: ClusterConnection): Promise<void> {
+	const target = connection ?? (await pickConnection(store, 'Select a cluster to reconnect'));
+	if (!target) return;
+	const refreshed = await vscode.window.withProgress(
+		{ location: vscode.ProgressLocation.Notification, title: `Connecting to ${target.label}…` },
+		() => local.refresh(target, { interactive: true }),
+	);
+	if (refreshed.connected) vscode.window.setStatusBarMessage(`$(check) Connected to ${target.label}`, 5000);
+	else vscode.window.showWarningMessage(`Couldn't reach ${target.label} at ${target.endpoint}. See the Service Fabric output channel.`);
+}
+
+/**
+ * `serviceFabric.cluster.remove`: deletes the given (or a picked) saved connection after
+ * confirming. Asks unless `serviceFabric.confirmDestructiveActions` is off.
+ */
+export async function removeCluster(store: ConnectionStore, connection?: ClusterConnection): Promise<void> {
+	const target = connection ?? (await pickConnection(store, 'Select a cluster to remove'));
+	if (!target) return;
+	if (
+		(vscode.workspace.getConfiguration('serviceFabric').get<boolean>('confirmDestructiveActions') ?? true) &&
+		(await vscode.window.showWarningMessage(
+			`Remove cluster ${target.label}?`,
+			{
+				modal: true,
+				detail: `${target.endpoint}\n\nThe saved connection and its security settings are removed from this workspace. Nothing on the cluster changes.`,
+			},
+			'Remove',
+		)) !== 'Remove'
+	) {
+		return;
+	}
+	await store.remove(target.id);
+}
+
+async function pickConnection(store: ConnectionStore, placeHolder: string): Promise<ClusterConnection | undefined> {
+	const connections = store.list();
+	if (connections.length === 0) {
+		vscode.window.showInformationMessage('No clusters configured. Use "Add Cluster…" first.');
+		return undefined;
+	}
+	const picked = await vscode.window.showQuickPick(
+		connections.map((c) => ({ label: c.label, description: c.endpoint, detail: connectionStateLabel(c), connection: c })),
+		{ placeHolder },
+	);
+	return picked?.connection;
+}
+
+function connectionStateLabel(c: ClusterConnection): string {
+	if (c.connected) return 'Connected';
+	return c.userDisconnected ? 'Disconnected' : 'Unreachable';
 }
 
 /** `serviceFabric.cluster.selectActive` */
 export async function selectActiveCluster(store: ConnectionStore): Promise<void> {
 	const connections = store.list();
 	if (connections.length === 0) {
-		vscode.window.showInformationMessage('No clusters configured. Use "Connect to Local Cluster" first.');
+		vscode.window.showInformationMessage('No clusters configured. Use "Add Cluster…" first.');
 		return;
 	}
 	const picked = await vscode.window.showQuickPick(
 		connections.map((c) => ({
 			label: c.label,
 			description: c.endpoint,
-			detail: c.connected ? 'Connected' : 'Disconnected',
+			detail: connectionStateLabel(c),
 			id: c.id,
 		})),
 		{ placeHolder: 'Select active Service Fabric cluster' },

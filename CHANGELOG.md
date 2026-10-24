@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Disconnect no longer deletes the cluster.** It keeps the saved connection (and its security settings) and stops probing it; new **Reconnect** probes it again. **Remove Cluster…** deletes a connection after confirming (honours `serviceFabric.confirmDestructiveActions`), from the right-click menu, an inline trash button on disconnected clusters, or the **Delete** key. Cluster rows say `disconnected` or `unreachable`.
+- **Status bar** turns red for cluster health `Error` and yellow for `Warning` or an unreachable cluster.
+- **Empty views.** The Applications view asks you to open a folder when none is open, says it's looking for projects during the first scan, and offers **Create New Application** only when a folder is open. Off Windows, the Clusters view offers only a remote connection.
+
 ## 1.2.1
 
 - **Fix: Build failed with `NETSDK1004` (`project.assets.json` not found) on a freshly created application.** The Build / Rebuild / Package tasks passed `-restore` only to `dotnet msbuild`; they now pass it to Visual Studio's `MSBuild.exe` too, which also doesn't restore the service projects' `PackageReference`s from the command line.

@@ -111,7 +111,9 @@ Every saved connection (local + remote) appears here. The icon shows its state, 
 | Server, green | Connected, cluster health `Ok` |
 | Server, yellow | Connected, health `Warning` |
 | Server, red | Connected, health `Error` |
-| Disconnect, dimmed | Disconnected / unreachable |
+| Disconnect, dimmed | `disconnected` (you ran **Disconnect**) or `unreachable` (the last probe failed) |
+
+**Disconnect** keeps the connection and its security settings but stops probing it; **Refresh Clusters** and the status bar poll skip it. Disconnected and unreachable clusters carry inline **Reconnect** and **Remove Cluster…** buttons. **Remove Cluster…** (also on the right-click menu, and the **Delete** key — **Cmd+Backspace** on macOS — when a cluster row is selected) deletes the saved connection after confirming (unless `serviceFabric.confirmDestructiveActions` is off); nothing on the cluster changes.
 
 Expanding a connected cluster shows the same hierarchy as Service Fabric Explorer, fetched live from the gateway as you expand each level:
 
@@ -132,7 +134,7 @@ Right-click menus follow the entity:
 
 | Entity | Actions |
 |---|---|
-| Cluster | **Open in Service Fabric Explorer**, **Show Details** (version, health, upgrade progress, load), **Show Health**, **Show Cluster Manifest**, **Show Diagnostic Events**, **Disconnect**, **Remove Cluster** (also on disconnected clusters) |
+| Cluster | **Open in Service Fabric Explorer**, **Show Details** (version, health, upgrade progress, load), **Show Health**, **Show Cluster Manifest**, **Show Diagnostic Events**, **Disconnect** / **Reconnect**, **Remove Cluster…** |
 | Application type / version | **Show Details** (default parameters, service types), **Unprovision Application Type…** |
 | Application | **Attach Debugger to Deployed Service…**, **Auto-attach Debugger Next Deploy**, **Show Details**, **Show Health**, **Delete Application…** |
 | Upgrading application | **Show Upgrade Progress**, **Resume Upgrade (Next Upgrade Domain)** (also an inline button; for `UnmonitoredManual` upgrades waiting between domains), **Change Upgrade Mode…** (Monitored / UnmonitoredAuto / UnmonitoredManual), **Roll Back Upgrade…** |
@@ -149,7 +151,7 @@ Right-click menus follow the entity:
 
 ### 3.3 Status bar
 
-Once a cluster is added, the status bar shows the active cluster with the Service Fabric icon (or a disconnected icon) and its node count (e.g. `1-node`/`5-node`). Hover for its health, nodes and applications; click it to switch the active cluster.
+Once a cluster is added, the status bar shows the active cluster with the Service Fabric icon (or a disconnected icon) and its node count (e.g. `1-node`/`5-node`). Hover for its health, nodes and applications; click it to switch the active cluster. The item turns red when cluster health is `Error`, and yellow when health is `Warning` or the cluster is unreachable (not when you disconnected it yourself).
 
 ---
 
@@ -833,8 +835,8 @@ All commands live under the **Service Fabric** category in the command palette.
 | Publish Application… / Remove Application | Deploys / removes through the SDK scripts (PowerShell engine) or the HTTP gateway (REST engine). Publish can also target a saved cluster directly. See §8. |
 | Add Cluster… | `+` in the Clusters view title bar; asks local or remote, then adds the connection. |
 | Connect to Local Cluster / Connect to Remote Cluster… | Adds a connection. |
-| Disconnect | Removes a saved connection. |
-| Remove Cluster | Removes a saved connection, connected or not (trash icon on disconnected clusters). |
+| Disconnect / Reconnect | Stops probing a saved connection, or probes it again (signing in if needed). |
+| Remove Cluster… | Deletes a saved connection after confirming. **Delete** in the Clusters view. |
 | Change Client Certificate… | Picks a new X.509 client certificate for a cluster, checks the gateway accepts it, and saves it. See §7.2. |
 | Encrypt Value with Certificate… | Encrypts a value for `IsEncrypted` / `PasswordEncrypted` with the cluster's secrets certificate. See §4.5. |
 | Build and Push Container Images… | `docker build` + `docker push` (with `az acr login` for ACR) for container services. See §11.2.1. |

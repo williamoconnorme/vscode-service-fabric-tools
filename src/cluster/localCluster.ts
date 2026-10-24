@@ -43,8 +43,10 @@ export class LocalClusterManager {
 	/**
 	 * Probes the cluster, stores the updated connection and returns it. Never throws for probe failures.
 	 * `interactive` lets an Entra ID cluster prompt for sign-in; background refreshes leave it off.
+	 * A cluster the user disconnected is only probed (and reconnected) by an interactive refresh.
 	 */
 	async refresh(conn: ClusterConnection, opts: { interactive?: boolean } = {}): Promise<ClusterConnection> {
+		if (conn.userDisconnected && !opts.interactive) return conn;
 		const client = createClientForConnection(conn, opts);
 		try {
 			const health = await client.getClusterHealth(5000);
@@ -53,6 +55,7 @@ export class LocalClusterManager {
 			const updated: ClusterConnection = {
 				...conn,
 				connected: true,
+				userDisconnected: undefined,
 				aggregatedHealthState: health.aggregatedHealthState,
 				deployedApplications: apps,
 				nodes,
@@ -65,6 +68,7 @@ export class LocalClusterManager {
 			const disconnected: ClusterConnection = {
 				...conn,
 				connected: false,
+				userDisconnected: undefined,
 				deployedApplications: [],
 				nodes: [],
 				aggregatedHealthState: undefined,

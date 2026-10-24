@@ -34,7 +34,7 @@ export function clusterEntityCommands(ctx: ClusterCommandContext): [string, (ite
 			}
 			if (needsConnection && !item.connection.connected && item.kind === 'cluster') {
 				vscode.window.showWarningMessage(
-					`${item.connection.label} is disconnected. Refresh the Clusters view once the cluster is reachable.`,
+					`${item.connection.label} is disconnected. Use Reconnect once the cluster is reachable.`,
 				);
 				return;
 			}
