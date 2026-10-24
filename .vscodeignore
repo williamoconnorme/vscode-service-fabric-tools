@@ -7,3 +7,8 @@ node_modules/**
 FORK.md
 .gitignore
 .gitattributes
+src/**
+dist/**/*.map
+tsconfig.json
+esbuild.config.mjs
+.prettierrc
