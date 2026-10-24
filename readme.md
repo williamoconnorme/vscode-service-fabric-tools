@@ -9,7 +9,7 @@ running service, and inspecting cluster diagnostic events.
 ## Features
 
 - **Project recognition & tree** — Auto-activates on workspaces containing `*.sfproj`. The **Service Fabric** activity-bar view shows applications, service-manifest packages, code/config/data packages, endpoints, default services, parameters, publish profiles, startup-service parameters, `StartupServices.xml`, and scripts.
-- **Manifest authoring** — XSD validation (via `redhat.vscode-xml`), F12 navigation between manifests, custom diagnostics (parameter usage SFD002/SFD003, version drift SFD001, duplicates SFD004), and "Promote literal to parameter" code action.
+- **Manifest authoring** — Built-in schema IntelliSense (element / attribute / value completion, hover docs, XSD validation; no XML extension needed), F12 navigation between manifests, custom diagnostics (parameter usage SFD002/SFD003, version drift SFD001, duplicates SFD004), and "Promote literal to parameter" code action.
 - **Build & package** — MSBuild task provider with auto-discovered toolchain (`vswhere.exe` or `dotnet msbuild`). Right-click `.sfproj` → Build / Rebuild / Clean / Package. **NuGet restore** runs automatically before each target via a three-strategy fallback (`nuget.exe` → `MSBuild /t:Restore` → in-process HTTPS download from api.nuget.org).
 - **Local cluster lifecycle** — Start / Stop / Reset / Switch-mode commands for the SDK dev cluster. **1-node** for fast inner loop, **5-node** for failover and rolling-upgrade testing.
 - **Cluster connections** — Local and remote connections, persisted per-workspace, with status-bar health/node/app indicator. Remote clusters can be unsecured, use a pinned (self-signed) server certificate, Microsoft Entra ID, or an X.509 client certificate loaded from a `.pfx`/PEM file (passphrase kept in the OS keychain).
@@ -27,7 +27,6 @@ running service, and inspecting cluster diagnostic events.
 ## Requirements
 
 - VS Code 1.90+
-- `redhat.vscode-xml` (declared as an extension dependency, installed automatically).
 - **Windows:** Visual Studio 2022 **or** Build Tools for VS 2022 with the *Azure development* workload + *Service Fabric Tools* component, and the Service Fabric SDK for the local cluster and the PowerShell deploy engine.
 - **macOS / Linux:** the .NET SDK (8+). Build, package, publish and remove work against remote clusters whose image store is `fabric:ImageStore`. The local dev cluster and debug attach are Windows-only.
 - For debug attach: `ms-dotnettools.csharp` (or compatible CoreCLR debugger).

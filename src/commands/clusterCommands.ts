@@ -47,7 +47,20 @@ export async function connectLocalCluster(local: LocalClusterManager): Promise<v
 	await local.connect();
 }
 
-/** `serviceFabric.cluster.connectRemote` */
+/** `serviceFabric.cluster.add`: the Clusters view's `+` button; asks local or remote, then connects. */
+export async function addCluster(store: ConnectionStore, local: LocalClusterManager, logger: Logger): Promise<void> {
+	const picked = await vscode.window.showQuickPick(
+		[
+			{ label: '$(vm) Local Cluster', detail: 'The dev cluster on this machine (serviceFabric.localCluster.endpoint)', remote: false },
+			{ label: '$(globe) Remote Cluster…', detail: 'Any cluster reachable through its HTTP gateway endpoint', remote: true },
+		],
+		{ placeHolder: 'Add a Service Fabric cluster' },
+	);
+	if (!picked) return;
+	if (picked.remote) await connectRemoteCluster(store, local, logger);
+	else await connectLocalCluster(local);
+}
+
 /**
  * `serviceFabric.cluster.connectRemote`: saves a remote cluster connection. For https
  * endpoints it offers to pin an untrusted server certificate, and for clusters secured

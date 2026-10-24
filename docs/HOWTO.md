@@ -31,7 +31,7 @@ This guide walks through every feature of the **Service Fabric Tools** extension
 
 | Capability | Requires |
 |---|---|
-| Authoring (tree, manifest validation, F12, code actions) | VS Code 1.90+, the `redhat.vscode-xml` extension (auto-installed as a dependency). Cross-platform. |
+| Authoring (tree, manifest validation, F12, code actions) | VS Code 1.90+. No other extensions. Cross-platform. |
 | Build / Package | **Windows:** Visual Studio 2022 **or** Build Tools for VS 2022 with the *Azure development* workload + *Service Fabric Tools* component. **macOS / Linux:** the .NET SDK (8 or later); the extension falls back to `dotnet msbuild`. `.NET Framework` services can't be built off Windows. |
 | Deploy / Remove — PowerShell engine | Windows. Service Fabric SDK (the `ServiceFabricSDK` PowerShell module is installed by the SDK setup). The default on Windows. |
 | Deploy / Remove — REST engine | Any OS. Only network access to the cluster's HTTP gateway (default port 19080); no Service Fabric SDK. The default on macOS / Linux. The cluster's image store must be `fabric:ImageStore`. See §8.4. |
@@ -42,8 +42,6 @@ This guide walks through every feature of the **Service Fabric Tools** extension
 
 - **From the marketplace**: search for *"Service Fabric Tools"* and install.
 - **From a VSIX**: open the command palette and run **Extensions: Install from VSIX…**, then pick the `vscode-service-fabric-*.vsix` file.
-
-When the extension activates it automatically pulls in `redhat.vscode-xml` for schema-aware XML editing.
 
 ---
 
@@ -156,15 +154,17 @@ The right-aligned status-bar item shows the active cluster, its node count (e.g.
 
 ## 4. Authoring application & service manifests
 
-### 4.1 Schema validation
+### 4.1 Schema IntelliSense and validation
 
-When opening any `ApplicationManifest.xml` or `ServiceManifest.xml`, the extension associates the file with the official Service Fabric XSD via `redhat.vscode-xml`. Errors and IntelliSense come from the schema for free.
+The extension has its own Service Fabric schema support; no XML extension is needed. It applies to any `.xml` file whose root element is in the `http://schemas.microsoft.com/2011/01/fabric` namespace: `ApplicationManifest.xml`, `ServiceManifest.xml`, `ApplicationParameters/*.xml`, cluster manifests and so on.
 
-The schema is **discovered at runtime** from the locally installed Service Fabric SDK — typically `C:\Program Files\Microsoft SDKs\Service Fabric\schemas\ServiceFabricServiceModel.xsd`, with `C:\Program Files\Microsoft Service Fabric\bin\Fabric\Fabric.Code\` as a secondary fallback. If your install is in an unusual location, set `serviceFabric.xmlSchemaPath` to either the schemas folder or the `.xsd` file directly.
+- **Completion.** Type `<` for the child elements allowed at that point (required ones first, inserted with their required attributes), or press Ctrl+Space on an empty line. A space inside a start tag lists the remaining attributes, and `"` lists enumerated values (`true`/`false`, `ExclusiveProcess`/`SharedProcess`, …). `</` closes the current element. In an empty `ApplicationManifest.xml` or `ServiceManifest.xml` the root element is offered with its namespace declarations.
+- **Hover.** Element and attribute names show the schema documentation, allowed values and defaults.
+- **Validation (`SFXxxx`).** Malformed XML (`SFX001`), elements not allowed in their parent (`SFX101`), unknown attributes (`SFX102`), missing required attributes (`SFX103`) or child elements (`SFX105`), and values outside an enumeration (`SFX104`) are errors. Elements repeated more often than allowed (`SFX106`) and text where none is allowed (`SFX107`) are warnings. Values containing `[Parameter]` references aren't checked, since they're substituted at deployment. An empty root element (the actor `ServiceManifest.xml` stub that the build fills in) isn't flagged for missing children. Child **order** inside a sequence isn't checked. Turn validation off with `serviceFabric.diagnostics.enableSchemaValidation: false`.
 
-On macOS / Linux there is no SDK installer: copy `ServiceFabricServiceModel.xsd` (from a Windows SDK install, or from the `microsoft/service-fabric` repository) into `~/.servicefabric/schemas/`, which is probed automatically, or point `serviceFabric.xmlSchemaPath` at it.
+**Which schema is used.** The extension bundles a model of `ServiceFabricServiceModel.xsd`. When a Service Fabric SDK is installed (`C:\Program Files\Microsoft SDKs\Service Fabric\schemas\`, with `C:\Program Files\Microsoft Service Fabric\bin\Fabric\Fabric.Code\` as a fallback, or `~/.servicefabric/schemas/` on macOS / Linux), that XSD is used instead, so a newer SDK's additions show up. Set `serviceFabric.xmlSchemaPath` to a folder or `.xsd` file to choose one explicitly. The **Service Fabric** output channel logs which one is in use.
 
-If neither the SDK nor an override is present, the extension logs a one-time hint on the **Service Fabric** output channel and falls back to the in-house diagnostics described below — XSD validation will be unavailable but everything else continues to work. If you see a "must be declared" error from a third-party DTD-based XML extension, disable it for the workspace; only `redhat.vscode-xml` (LemMinX) is supported.
+If you also have `redhat.vscode-xml` installed and have associated the Service Fabric XSD with it yourself (`xml.fileAssociations`), you'll see duplicate completions and errors; remove that association.
 
 ### 4.2 In-house diagnostics (`SFDxxx`)
 
@@ -289,6 +289,8 @@ Once it is running, **Connect to Local Cluster** (or **Connect to Remote Cluster
 ---
 
 ## 7. Connecting to clusters (local & remote)
+
+You can save any number of clusters. Click **+** (**Add Cluster…**) in the **Clusters** view title bar to add another local or remote connection; **Select Active Cluster** picks the one commands target by default.
 
 ### 7.1 Local cluster
 
@@ -733,6 +735,7 @@ Idempotent — running it twice is safe; the second run reports zero consumers u
 | `serviceFabric.confirmDestructiveActions` | `true` | Confirm before Remove / Reset Local Cluster. |
 | `serviceFabric.tree.showDeploymentStatus` | `true` | Badge applications that are deployed on the active cluster. |
 | `serviceFabric.diagnostics.enableManifestRules` | `true` | Enable `SFD00x` rules. |
+| `serviceFabric.diagnostics.enableSchemaValidation` | `true` | Enable `SFXxxx` schema validation. Completion and hover stay on. See §4.1. |
 | `serviceFabric.deploy.packagePath` | `""` | Override the application package path passed to `Deploy-FabricApplication.ps1`. Absolute, or relative to the `.sfproj` directory. Use when MSBuild outputs the package somewhere other than `pkg\<Configuration>\` and the `.sfproj`'s `<OutputPath>`/`<PackageLocation>` (e.g. monorepo drops to a sibling folder). **1.1.9:** MSBuild `$(Property)` references (`$(MSBuildProjectName)`, `$(Configuration)`, etc.) are expanded against the `.sfproj`'s PropertyGroup values. **1.1.11:** the override path is now scanned to `serviceFabric.deploy.searchMaxDepth` levels deep (same as every other declared candidate) when the manifest is not directly under it. When this setting resolves to a package whose `ApplicationTypeName` does not match the project's declared type, a modal warning prompts before deploy (not persisted). |
 | `serviceFabric.deploy.useMsbuildPropertyEvaluator` | `false` | When `true`, fall back to invoking `MSBuild.exe -getProperty:` to resolve `<OutputPath>` / `<PackageLocation>` values that reference properties defined in imported targets (e.g. `Microsoft.ServiceFabric.targets`, `Directory.Build.props`). The in-extension expander handles all properties declared in the `.sfproj`'s own `<PropertyGroup>` blocks; enable this only when your build relies on imported-property expansion. Adds 1–3 s per Publish on cold cache. See §8.1. |
 | `serviceFabric.deploy.suppressMsbuildEvaluatorPrompt` | `false` | Skip the modal prompt (1.2.0) that offers to enable `serviceFabric.deploy.useMsbuildPropertyEvaluator` when Tier 1 expansion leaves unresolved MSBuild properties. Power users / CI configurations can set this to `true` to keep Publish behavior strictly governed by `useMsbuildPropertyEvaluator`. Does not affect projects whose Tier 1 expansion resolves every token. See §8.1. |
@@ -742,7 +745,7 @@ Idempotent — running it twice is safe; the second run reports zero consumers u
 | `serviceFabric.deploy.overwriteBehavior` | `SameAppTypeAndVersion` | REST engine: what Publish does when the application exists and isn't being upgraded. `SameAppTypeAndVersion` replaces it only at the same version, `Always` replaces it whenever, `Never` fails. The PowerShell engine keeps the behavior of `Deploy-FabricApplication.ps1`. |
 | `serviceFabric.deploy.copyPackageTimeoutSec` | `600` | REST engine: overall time limit for the image-store upload. The profile's `CopyPackageTimeoutSec` takes precedence. |
 | `serviceFabric.remove.waitSeconds` | `30` | Maximum seconds to wait for the cluster to finish tearing down application instances of a type before unregistering it. `Remove-ServiceFabricApplication` is async — unregistering too soon produces *"Application type and version is still in use"*. Set to `0` to skip the wait (and accept the unregister may fail); raise it for slow remote clusters. See §8.2. |
-| `serviceFabric.xmlSchemaPath` | `""` | Override path to the Service Fabric XSDs. Folder containing `ServiceFabricServiceModel.xsd`, or a direct `.xsd` file. Empty falls back to the standard SDK install locations and `~/.servicefabric/schemas`. See §4.1. |
+| `serviceFabric.xmlSchemaPath` | `""` | Service Fabric XSD for completion, hover and validation. Folder containing `ServiceFabricServiceModel.xsd`, or a direct `.xsd` file. Empty tries the standard SDK install locations and `~/.servicefabric/schemas`, then the bundled schema. See §4.1. |
 | `serviceFabric.logLevel` | `info` | `error` / `warn` / `info` / `debug`. |
 | `serviceFabric.localCluster.endpoint` | `http://localhost:19080` | HTTP gateway endpoint for the local dev cluster. |
 | `serviceFabric.localCluster.nodeCount` | `5` | Default for **Start Local Cluster**. `1` or `5`. |
@@ -761,6 +764,7 @@ All commands live under the **Service Fabric** category in the command palette.
 | Refresh / Refresh Clusters | Re-scans the workspace / re-probes every saved cluster connection. |
 | Build / Rebuild / Clean / Package Application | MSBuild target on the selected `.sfproj`. |
 | Publish Application… / Remove Application | Deploys / removes through the SDK scripts (PowerShell engine) or the HTTP gateway (REST engine). See §8. |
+| Add Cluster… | `+` in the Clusters view title bar; asks local or remote, then adds the connection. |
 | Connect to Local Cluster / Connect to Remote Cluster… | Adds a connection. |
 | Disconnect | Removes a saved connection. |
 | Change Client Certificate… | Picks a new X.509 client certificate for a cluster, checks the gateway accepts it, and saves it. See §7.2. |
@@ -865,8 +869,8 @@ No network calls beyond:
 **Does this work on macOS / Linux?**
 Yes, for everything except the local dev cluster and debug attach. Authoring works everywhere. Build and Package use `dotnet msbuild` (.NET services only). Publish and Remove use the REST engine against a remote cluster's HTTP gateway, with unsecured, server-certificate, X.509 client-certificate and Entra ID clusters all supported (§8.4). The local dev cluster and attaching the debugger need Windows. For a local cluster on macOS / Linux see the Docker onebox notes in §6.4.
 
-**Why does it depend on `redhat.vscode-xml`?**
-Microsoft does not ship a first-party XML extension for VS Code. `redhat.vscode-xml` is the industry-standard LemMinX-based language server, and it powers schema validation, hover, and IntelliSense for both manifests and `.sfproj` files. The dependency is automatic.
+**Do I need an XML extension?**
+No. Manifest completion, hover and validation are built in (§4.1), so `redhat.vscode-xml` (and its Java / native language server) is no longer installed as a dependency. You can still install it for general XML editing.
 
 **Can I use a non-default Service Fabric runtime port?**
 Yes — set `serviceFabric.localCluster.endpoint` for local, and supply the full URL when adding a remote connection.

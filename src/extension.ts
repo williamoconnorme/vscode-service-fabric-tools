@@ -17,7 +17,7 @@ import { ClusterStatusBar } from './views/clusterStatusBar';
 import { Telemetry } from './util/telemetry';
 import { DiagnosticEventsPanel } from './views/diagnosticEventsPanel';
 import { ServiceFabricDebugConfigurationProvider, attachToDeployedService } from './debug/attachCommand';
-import { registerXmlSchemaAssociations } from './language/xmlSchemaAssociation';
+import { SchemaLanguageFeatures } from './language/schema/schemaLanguageFeatures';
 import { ManifestDiagnostics } from './language/manifestDiagnostics';
 import { ManifestDefinitionProvider } from './language/manifestDefinitionProvider';
 import { ManifestCodeActionProvider } from './language/manifestCodeActions';
@@ -27,6 +27,7 @@ import { ensureNugetRestored } from './build/nugetRestore';
 import { publishApplication } from './commands/publishCommand';
 import { removeApplication } from './commands/removeCommand';
 import {
+	addCluster,
 	changeClientCertificate,
 	connectLocalCluster,
 	connectRemoteCluster,
@@ -150,7 +151,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	};
 	updateHasProjectContext();
 	context.subscriptions.push(projects.onDidChange(updateHasProjectContext));
-	await registerXmlSchemaAssociations(context, logger);
+	const schemaFeatures = new SchemaLanguageFeatures(logger);
+	schemaFeatures.setEnabled(config.get<boolean>('diagnostics.enableSchemaValidation') ?? true);
+	context.subscriptions.push(schemaFeatures);
 
 	const manifestDiagnostics = new ManifestDiagnostics(projects);
 	manifestDiagnostics.setEnabled(config.get<boolean>('diagnostics.enableManifestRules') ?? true);
@@ -172,6 +175,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			if (e.affectsConfiguration('serviceFabric.diagnostics.enableManifestRules')) {
 				const enabled = vscode.workspace.getConfiguration('serviceFabric').get<boolean>('diagnostics.enableManifestRules') ?? true;
 				manifestDiagnostics.setEnabled(enabled);
+			}
+			if (e.affectsConfiguration('serviceFabric.diagnostics.enableSchemaValidation')) {
+				schemaFeatures.setEnabled(vscode.workspace.getConfiguration('serviceFabric').get<boolean>('diagnostics.enableSchemaValidation') ?? true);
 			}
 		}),
 	);
@@ -240,6 +246,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			(arg) => publishApplication(projects, connections, localCluster, logger, arg, context.workspaceState, telemetry),
 		],
 		['serviceFabric.remove', (arg) => removeApplication(projects, connections, localCluster, logger, arg)],
+		['serviceFabric.cluster.add', () => addCluster(connections, localCluster, logger)],
 		['serviceFabric.cluster.connectLocal', () => connectLocalCluster(localCluster)],
 		['serviceFabric.cluster.connectRemote', () => connectRemoteCluster(connections, localCluster, logger)],
 		['serviceFabric.cluster.disconnect', (node?: ClusterTreeItem) => disconnectCluster(connections, node?.connection)],

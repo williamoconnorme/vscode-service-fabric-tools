@@ -25,9 +25,6 @@
         "workspaceContains:**/*.sfproj",
         "onCommand:serviceFabric.createApplication"
     ],
-    "extensionDependencies": [
-        "redhat.vscode-xml"
-    ],
     "contributes": {
         "languages": [
             {
@@ -85,7 +82,7 @@
             },
             {
                 "view": "serviceFabric.clusters",
-                "contents": "No Service Fabric clusters configured.\n[Connect to Local Cluster](command:serviceFabric.cluster.connectLocal)\n[Connect to Remote Cluster…](command:serviceFabric.cluster.connectRemote)\n[Open Help Guide](command:serviceFabric.openHelp)"
+                "contents": "No Service Fabric clusters configured.\n[Connect to Local Cluster](command:serviceFabric.cluster.connectLocal)\n[Connect to Remote Cluster…](command:serviceFabric.cluster.connectRemote)"
             }
         ],
         "commands": [
@@ -144,6 +141,12 @@
                 "command": "serviceFabric.remove",
                 "title": "Remove Application",
                 "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.add",
+                "title": "Add Cluster…",
+                "category": "Service Fabric",
+                "icon": "$(add)"
             },
             {
                 "command": "serviceFabric.cluster.connectLocal",
@@ -458,9 +461,9 @@
                     "group": "navigation@9"
                 },
                 {
-                    "command": "serviceFabric.openHelp",
+                    "command": "serviceFabric.cluster.add",
                     "when": "view == serviceFabric.clusters",
-                    "group": "navigation@9"
+                    "group": "navigation@0"
                 },
                 {
                     "submenu": "serviceFabric.clusters.filter",
@@ -1084,6 +1087,11 @@
                     "default": true,
                     "description": "Enable in-house diagnostics for application/service manifests (parameter usage, version drift, etc.)."
                 },
+                "serviceFabric.diagnostics.enableSchemaValidation": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Validate Service Fabric XML (application and service manifests, application parameter files) against the Service Fabric schema: unknown elements and attributes, missing required ones, and invalid enumerated values. Completion and hover stay on when this is off."
+                },
                 "serviceFabric.deploy.packagePath": {
                     "type": "string",
                     "default": "",
@@ -1157,7 +1165,7 @@
                 "serviceFabric.xmlSchemaPath": {
                     "type": "string",
                     "default": "",
-                    "description": "Override path to the Service Fabric XSDs. Accepts either a folder containing 'ServiceFabricServiceModel.xsd' or a direct path to the .xsd file. When empty the extension probes the standard SDK install locations (e.g. 'C:\\Program Files\\Microsoft SDKs\\Service Fabric\\schemas')."
+                    "description": "Path to the Service Fabric XSD used for manifest completion, hover and validation. Accepts either a folder containing 'ServiceFabricServiceModel.xsd' or a direct path to the .xsd file. When empty the extension probes the standard SDK install locations (e.g. 'C:\\Program Files\\Microsoft SDKs\\Service Fabric\\schemas') and otherwise uses the schema bundled with the extension."
                 },
                 "serviceFabric.logLevel": {
                     "type": "string",
@@ -1328,6 +1336,7 @@
         "watch": "node esbuild.config.mjs --watch",
         "typecheck": "tsc --noEmit",
         "test": "node scripts/run-tests.mjs",
+        "schema": "node scripts/generate-schema.mjs",
         "format": "prettier --write \"src/**/*.ts\"",
         "package": "node -e \"require('fs').mkdirSync('artifacts',{recursive:true})\" && vsce package --no-dependencies --out artifacts/",
         "icons": "node scripts/generate-icons.js"
