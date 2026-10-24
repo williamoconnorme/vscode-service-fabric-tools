@@ -1,0 +1,85 @@
+name: Release
+
+# Run by hand from the Actions tab: builds and tests the extension, packages the
+# .vsix, publishes it to the VS Code Marketplace and creates a GitHub release
+# (tag v<version>) with the .vsix attached and the CHANGELOG section as notes.
+# Bump "version" in package.json and add a "## <version>" section to
+# CHANGELOG.md before running it.
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish to the VS Code Marketplace (off creates only the GitHub release)
+        type: boolean
+        default: true
+      prerelease:
+        description: Mark as a pre-release
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency: release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # Add required reviewers to this environment (Settings → Environments) to gate publishing.
+    environment: marketplace
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+      - name: Read the version
+        id: meta
+        run: |
+          version=$(node -p "require('./package.json').version")
+          name=$(node -p "require('./package.json').name")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "vsix=$name-$version.vsix" >> "$GITHUB_OUTPUT"
+
+      - name: Check this version isn't released yet
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" > /dev/null; then
+            echo "::error::v$VERSION is already released. Bump the version in package.json first."
+            exit 1
+          fi
+
+      - name: Release notes
+        run: node scripts/release-notes.mjs "${{ steps.meta.outputs.version }}" > release-notes.md
+
+      - name: Package
+        run: npx vsce package --no-dependencies ${{ inputs.prerelease && '--pre-release' || '' }} --out "${{ steps.meta.outputs.vsix }}"
+
+      - name: Publish to the VS Code Marketplace
+        if: inputs.publish
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "::error::The VSCE_PAT secret isn't set. Add a Marketplace personal access token (Settings → Secrets and variables → Actions)."
+            exit 1
+          fi
+          npx vsce publish --packagePath "${{ steps.meta.outputs.vsix }}" ${{ inputs.prerelease && '--pre-release' || '' }}
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          gh release create "v$VERSION" "${{ steps.meta.outputs.vsix }}" \
+            --title "v$VERSION" \
+            --notes-file release-notes.md \
+            --target "$GITHUB_SHA" \
+            ${{ inputs.prerelease && '--prerelease' || '' }}

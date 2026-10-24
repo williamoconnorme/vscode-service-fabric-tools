@@ -76,7 +76,7 @@ The extension sends no telemetry.
 
 ## Contributing
 
-Issues and pull requests are welcome on [GitHub](https://github.com/williamoconnorme/sfproj-tools). See [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
+Issues and pull requests are welcome on [GitHub](https://github.com/williamoconnorme/vscode-service-fabric-tools). See [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
 
 ## License
 

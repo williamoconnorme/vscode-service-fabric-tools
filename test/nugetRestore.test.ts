@@ -8,13 +8,13 @@ const importOf = (prefix: string): string =>
 
 test('computePackagesDirectory follows the .sfproj import', () => {
 	const sfproj = path.join(path.sep, 'repo', 'src', 'App', 'App.sfproj');
-	assert.equal(computePackagesDirectory(sfproj, importOf('..\\packages\\')), path.join(path.sep, 'repo', 'src', 'packages'));
-	assert.equal(computePackagesDirectory(sfproj, importOf('..\\..\\packages\\')), path.join(path.sep, 'repo', 'packages'));
-	assert.equal(computePackagesDirectory(sfproj, importOf('packages/')), path.join(path.sep, 'repo', 'src', 'App', 'packages'));
+	assert.equal(computePackagesDirectory(sfproj, importOf('..\\packages\\')), path.resolve(path.sep, 'repo', 'src', 'packages'));
+	assert.equal(computePackagesDirectory(sfproj, importOf('..\\..\\packages\\')), path.resolve(path.sep, 'repo', 'packages'));
+	assert.equal(computePackagesDirectory(sfproj, importOf('packages/')), path.resolve(path.sep, 'repo', 'src', 'App', 'packages'));
 });
 
 test('computePackagesDirectory falls back to ../packages', () => {
 	const sfproj = path.join(path.sep, 'repo', 'App', 'App.sfproj');
-	assert.equal(computePackagesDirectory(sfproj, '<Project />'), path.join(path.sep, 'repo', 'packages'));
-	assert.equal(computePackagesDirectory(sfproj, importOf('$(SolutionDir)packages\\')), path.join(path.sep, 'repo', 'packages'));
+	assert.equal(computePackagesDirectory(sfproj, '<Project />'), path.resolve(path.sep, 'repo', 'packages'));
+	assert.equal(computePackagesDirectory(sfproj, importOf('$(SolutionDir)packages\\')), path.resolve(path.sep, 'repo', 'packages'));
 });

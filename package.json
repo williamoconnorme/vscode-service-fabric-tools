@@ -7,12 +7,12 @@
     "license": "MIT",
     "repository": {
         "type": "git",
-        "url": "https://github.com/williamoconnorme/sfproj-tools.git"
+        "url": "https://github.com/williamoconnorme/vscode-service-fabric-tools.git"
     },
     "bugs": {
-        "url": "https://github.com/williamoconnorme/sfproj-tools/issues"
+        "url": "https://github.com/williamoconnorme/vscode-service-fabric-tools/issues"
     },
-    "homepage": "https://github.com/williamoconnorme/sfproj-tools#readme",
+    "homepage": "https://github.com/williamoconnorme/vscode-service-fabric-tools#readme",
     "icon": "media/icon.png",
     "engines": {
         "vscode": "^1.90.0"

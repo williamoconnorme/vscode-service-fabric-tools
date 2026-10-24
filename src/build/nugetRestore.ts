@@ -201,7 +201,7 @@ export function computePackagesDirectory(sfprojPath: string, sfprojXml?: string)
 		const relative = m[1].replace(/[\\/]+/g, path.sep);
 		return path.resolve(sfprojDir, relative || '.');
 	}
-	return path.join(path.dirname(sfprojDir), 'packages');
+	return path.resolve(path.dirname(sfprojDir), 'packages');
 }
 
 function describe(packages: PackageRef[]): string {

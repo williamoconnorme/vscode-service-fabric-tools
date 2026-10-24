@@ -28,6 +28,13 @@ Disable the original *Service Fabric Project (sfproj) Tools* extension while you
 
 This project is a fork of [Service Fabric Project (sfproj) Tools](https://marketplace.visualstudio.com/items?itemName=sfproj-tools.service-fabric-project-tools-vscode) 1.1.11 (MIT). The original source repository isn't public, so the TypeScript in `src/` was rebuilt from the published package. The tag `upstream-1.1.11` holds the unmodified package.
 
+## Releasing
+
+1. Bump `version` in `package.json` and add a `## <version>` section to `CHANGELOG.md`.
+2. Push to `main`, then run the **Release** workflow from the Actions tab.
+
+The workflow tests and packages the extension, publishes it to the Marketplace (needs the `VSCE_PAT` secret), and creates a `v<version>` GitHub release with the `.vsix` attached and the changelog section as notes. Untick **publish** to create only the release. Every CI run on `main` also uploads the `.vsix` as a build artifact.
+
 ## Pull requests
 
 Keep changes focused, add tests for logic that can run without VS Code, and add a line to `CHANGELOG.md`.
