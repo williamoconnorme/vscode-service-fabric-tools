@@ -8,12 +8,15 @@
  * client, file system and logger (no `vscode` imports), so it is unit-tested
  * against a fake client.
  */
+import { existsSync } from 'fs';
 import * as fsp from 'fs/promises';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import type { ApplicationUpgradeDescription, SfRestClient } from '../cluster/sfRestClient';
 import type { PublishProfileUpgrade, UpgradeMode } from './deployScript';
 import { toServiceDescription, type StartupServiceSpec } from './startupServices';
+import { AzureBlobStore, parseXstoreConnectionString } from './azureBlobStore';
+import { compressApplicationPackage } from './packageCompression';
 
 /** The gateway calls the engine makes. A structural subset of {@link SfRestClient}, so tests can fake it. */
 export type RestDeployClient = Pick<
@@ -59,7 +62,7 @@ export interface PublishProfileDeploySettings {
 	upgrade?: PublishProfileUpgrade;
 	/** `<CopyPackageParameters CopyPackageTimeoutSec>`; overall ceiling for the upload. */
 	copyPackageTimeoutSec?: number;
-	/** `<CopyPackageParameters CompressPackage>`; not supported yet (uploads uncompressed). */
+	/** `<CopyPackageParameters CompressPackage>`: zip each code / config / data package before uploading. */
 	compressPackage?: boolean;
 	/** `<RegisterApplicationParameters RegisterApplicationTypeTimeoutSec>`. */
 	registerApplicationTypeTimeoutSec?: number;
@@ -85,6 +88,11 @@ export interface RestDeployOptions {
 	pollIntervalMs?: number;
 	/** Wait limit for deletes and unprovisions to finish. Default 120 s. */
 	waitSeconds?: number;
+	/**
+	 * For `xstore:` image stores whose connection string the cluster manifest
+	 * doesn't reveal (encrypted): asks for it. `undefined` cancels the deploy.
+	 */
+	resolveXstoreConnectionString?: (reason: string) => Promise<string | undefined>;
 }
 
 /** A file in the application package, relative path with `/` separators. */
@@ -411,7 +419,7 @@ export async function deployViaRest(client: RestDeployClient, opts: RestDeployOp
 	};
 
 	// 1. Image store check.
-	await checkImageStore(client, logger);
+	const imageStore = await resolveImageStore(client, opts, logger);
 	checkCancelled(token);
 
 	// 2. Decide what to do.
@@ -446,11 +454,16 @@ export async function deployViaRest(client: RestDeployClient, opts: RestDeployOp
 
 	let provisionedHere = false;
 	let storeRoot: string | undefined;
+	let compressedRoot: string | undefined;
 	let succeeded = false;
 	try {
 		if (plan.provision) {
 			storeRoot = `${typeName}_${typeVersion}_${randomUUID().slice(0, 8)}`.replace(/[^\w.-]/g, '_');
-			await uploadPackage(client, opts, storeRoot, logger, report);
+			if (opts.profile.compressPackage) {
+				report('Compressing the package (CompressPackage)...');
+				compressedRoot = await compressApplicationPackage(opts.packageRoot);
+			}
+			await imageStore.upload(compressedRoot ?? opts.packageRoot, storeRoot, report);
 			checkCancelled(token);
 			report(`Registering application type ${typeName} ${typeVersion}...`, 5);
 			const registerTimeoutMs = (opts.profile.registerApplicationTypeTimeoutSec ?? 300) * 1000;
@@ -459,7 +472,7 @@ export async function deployViaRest(client: RestDeployClient, opts: RestDeployOp
 			await waitForProvisioned(client, typeName, typeVersion, opts.profile.registerApplicationTypeTimeoutSec ?? 600, pollMs, token);
 			logger.info(`Application type ${typeName} ${typeVersion} registered.`);
 			// The package is no longer needed once provisioned (as in Publish-NewServiceFabricApplication).
-			await removeFromImageStore(client, storeRoot, logger);
+			await imageStore.remove(storeRoot);
 			storeRoot = undefined;
 		} else {
 			logger.info(`Application type ${typeName} ${typeVersion} is already registered; skipping upload.`);
@@ -481,30 +494,108 @@ export async function deployViaRest(client: RestDeployClient, opts: RestDeployOp
 		}
 		succeeded = true;
 	} finally {
-		if (storeRoot) await removeFromImageStore(client, storeRoot, logger);
+		if (storeRoot) await imageStore.remove(storeRoot);
+		if (compressedRoot) await fsp.rm(compressedRoot, { recursive: true, force: true }).catch(() => undefined);
 		if (!succeeded && provisionedHere) await unprovisionIfUnused(client, typeName, typeVersion, logger);
 	}
 }
 
-async function checkImageStore(client: RestDeployClient, logger: DeployLogger): Promise<void> {
+/** Where a deploy uploads the package: the gateway's native image store, a local `file:` share, or Azure Storage (`xstore:`). */
+interface ImageStoreBackend {
+	upload(root: string, storeRoot: string, report: (message: string, increment?: number) => void): Promise<void>;
+	remove(storeRoot: string): Promise<void>;
+}
+
+/** True when the cluster manifest marks `ImageStoreConnectionString` as encrypted. */
+export function isImageStoreConnectionStringEncrypted(clusterManifestXml: string): boolean {
+	const param = /<Parameter\b[^>]*\bName\s*=\s*"ImageStoreConnectionString"[^>]*>/i.exec(clusterManifestXml)?.[0] ?? '';
+	return /\bIsEncrypted\s*=\s*"true"/i.test(param);
+}
+
+async function resolveImageStore(client: RestDeployClient, opts: RestDeployOptions, logger: DeployLogger): Promise<ImageStoreBackend> {
+	const gateway: ImageStoreBackend = {
+		upload: (root, storeRoot, report) => uploadPackage(client, { ...opts, packageRoot: root }, storeRoot, logger, report),
+		remove: (storeRoot) => removeFromImageStore(client, storeRoot, logger),
+	};
 	let manifest: string;
 	try {
 		manifest = await client.getClusterManifest();
 	} catch (err) {
 		logger.warn(`Couldn't read the cluster manifest to check the image store; assuming fabric:ImageStore. ${(err as Error).message}`);
-		return;
+		return gateway;
 	}
-	const store = parseImageStoreConnectionString(manifest);
+	const store = parseImageStoreConnectionString(manifest)?.trim();
 	if (!store) {
 		logger.warn('The cluster manifest has no ImageStoreConnectionString; assuming fabric:ImageStore.');
-		return;
+		return gateway;
 	}
-	if (!/^fabric:ImageStore$/i.test(store.trim())) {
-		const scheme = /^([a-z]+:)/i.exec(store.trim())?.[1] ?? store;
-		throw new Error(
-			`This cluster's image store (\`${scheme}\`) can't be uploaded to over the HTTP gateway. Use the PowerShell engine on Windows, or \`sfctl application upload\`.`,
-		);
+	if (/^fabric:ImageStore$/i.test(store)) return gateway;
+	const encrypted = isImageStoreConnectionStringEncrypted(manifest);
+	if (/^file:/i.test(store) && !encrypted) {
+		const share = store.slice('file:'.length);
+		if (!existsSync(share)) {
+			throw new Error(
+				`This cluster's image store is the folder ${share} (file:), which isn't reachable from this machine. Publish from a machine that can reach it, or use the PowerShell engine.`,
+			);
+		}
+		logger.info(`Image store: local folder ${share}.`);
+		return {
+			async upload(root, storeRoot, report) {
+				report(`Copying the package to ${share}...`);
+				await fsp.cp(root, path.join(share, storeRoot), { recursive: true });
+			},
+			async remove(storeRoot) {
+				await fsp
+					.rm(path.join(share, storeRoot), { recursive: true, force: true })
+					.catch((err: Error) => logger.warn(`Couldn't remove ${storeRoot} from ${share}: ${err.message}`));
+			},
+		};
 	}
+	if (/^xstore:/i.test(store)) {
+		let connectionString: string | undefined = encrypted ? undefined : store;
+		if (!connectionString || !/AccountKey=/i.test(connectionString)) {
+			connectionString = await opts.resolveXstoreConnectionString?.(
+				encrypted
+					? "The cluster's xstore: image store connection string is encrypted in the cluster manifest."
+					: "The cluster's xstore: image store connection string has no account key.",
+			);
+			if (!connectionString) throw new Error("This cluster's image store is Azure Storage (xstore:) and no connection string was supplied.");
+		}
+		const cfg = parseXstoreConnectionString(connectionString);
+		const blobs = new AzureBlobStore(cfg);
+		logger.info(`Image store: Azure Storage account ${cfg.accountName}, container ${cfg.container}.`);
+		return {
+			upload: (root, storeRoot, report) => uploadToBlobStore(blobs, root, storeRoot, opts, logger, report),
+			async remove(storeRoot) {
+				await blobs.deletePrefix(storeRoot).catch((err: Error) => logger.warn(`Couldn't remove ${storeRoot} from Azure Storage: ${err.message}`));
+			},
+		};
+	}
+	const scheme = /^([a-z]+:)/i.exec(store)?.[1] ?? store;
+	throw new Error(
+		`This cluster's image store (\`${scheme}\`) isn't supported by the REST engine${encrypted ? ' (its connection string is encrypted)' : ''}. Use the PowerShell engine on Windows, or \`sfctl application upload\`.`,
+	);
+}
+
+async function uploadToBlobStore(
+	blobs: AzureBlobStore,
+	root: string,
+	storeRoot: string,
+	opts: RestDeployOptions,
+	logger: DeployLogger,
+	report: (message: string, increment?: number) => void,
+): Promise<void> {
+	const fs = opts.fs ?? nodeFs;
+	const { files } = await fs.walk(root);
+	const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
+	report(`Uploading ${files.length} file(s) (${formatBytes(totalBytes)}) to Azure Storage at ${storeRoot}...`);
+	const incrementPerByte = totalBytes > 0 ? 80 / totalBytes : 0;
+	await runWithConcurrency(files, UPLOAD_CONCURRENCY, async (file) => {
+		checkCancelled(opts.token);
+		await blobs.uploadBlob(`${storeRoot}/${file.relativePath}`, (start, end) => fs.read(file.absolutePath, start, end), file.size);
+		opts.progress?.(`Uploaded ${file.relativePath}`, file.size * incrementPerByte);
+	});
+	logger.info(`Upload complete (${files.length} file(s), ${formatBytes(totalBytes)}).`);
 }
 
 async function uploadPackage(
@@ -519,7 +610,6 @@ async function uploadPackage(
 	if (!files.some((f) => f.relativePath === 'ApplicationManifest.xml')) {
 		throw new Error(`${opts.packageRoot} has no ApplicationManifest.xml; it isn't an application package.`);
 	}
-	if (opts.profile.compressPackage) logger.warn('CompressPackage is not supported by the REST engine; uploading uncompressed.');
 	const { fileSteps, markerSteps } = planUpload(files, directories, storeRoot);
 	const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
 	report(`Uploading ${files.length} file(s) (${formatBytes(totalBytes)}) to the image store at ${storeRoot}...`);

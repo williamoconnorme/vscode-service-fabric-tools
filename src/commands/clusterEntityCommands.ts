@@ -52,6 +52,10 @@ export function clusterEntityCommands(ctx: ClusterCommandContext): [string, (ite
 		['serviceFabric.cluster.copyName', bind(copyName, false)],
 		['serviceFabric.cluster.unprovisionType', bind(unprovisionApplicationType)],
 		['serviceFabric.cluster.deleteApplication', bind(deleteApplication)],
+		['serviceFabric.cluster.showUpgradeProgress', bind(showUpgradeProgress)],
+		['serviceFabric.cluster.resumeUpgrade', bind(resumeUpgrade)],
+		['serviceFabric.cluster.rollbackUpgrade', bind(rollbackUpgrade)],
+		['serviceFabric.cluster.changeUpgradeMode', bind(changeUpgradeMode)],
 		['serviceFabric.cluster.deleteService', bind(deleteService)],
 		['serviceFabric.cluster.scaleService', bind(scaleService)],
 		['serviceFabric.cluster.resetPartitionLoad', bind(resetPartitionLoad)],
@@ -365,6 +369,78 @@ const deleteApplication: EntityHandler = async (ctx, item, client) => {
 	);
 	if (!choice) return;
 	await runMutation(ctx, `Deleting fabric:/${e.appName}…`, () => client.deleteApplication(e.appId ?? '', choice === 'Force Delete'));
+};
+
+// ---- Upgrades in progress ---------------------------------------------------------------
+
+/** The application's upgrade progress, or `undefined` (with a message) when it isn't upgrading. */
+async function upgradeInProgress(item: ClusterTreeItem, client: SfRestClient): Promise<any | undefined> {
+	const progress = await client.getApplicationUpgradeProgress(item.entity.appId ?? '');
+	const state = String(progress?.UpgradeState ?? '');
+	if (!/InProgress|Pending/.test(state)) {
+		vscode.window.showInformationMessage(`fabric:/${item.entity.appName} isn't upgrading${state ? ` (upgrade state: ${state})` : ''}.`);
+		return undefined;
+	}
+	return progress;
+}
+
+const showUpgradeProgress: EntityHandler = async (ctx, item, client) => {
+	const progress = await client.getApplicationUpgradeProgress(item.entity.appId ?? '');
+	await ctx.documents.showJson(`Upgrade progress: fabric:/${item.entity.appName}`, progress);
+};
+
+const resumeUpgrade: EntityHandler = async (ctx, item, client) => {
+	const progress = await upgradeInProgress(item, client);
+	if (!progress) return;
+	const next = String(progress.NextUpgradeDomain ?? '');
+	if (progress.UpgradeState !== 'RollingForwardPending' || !next) {
+		vscode.window.showInformationMessage(
+			`fabric:/${item.entity.appName} isn't waiting to start an upgrade domain (state: ${progress.UpgradeState}). Resuming only applies to UnmonitoredManual upgrades between domains.`,
+		);
+		return;
+	}
+	await runMutation(ctx, `Starting upgrade domain ${next} for fabric:/${item.entity.appName}…`, () =>
+		client.moveToNextUpgradeDomain(item.entity.appId ?? '', next),
+	);
+};
+
+const rollbackUpgrade: EntityHandler = async (ctx, item, client) => {
+	const progress = await upgradeInProgress(item, client);
+	if (!progress) return;
+	const target = progress.TargetApplicationTypeVersion ? ` to ${progress.TargetApplicationTypeVersion}` : '';
+	if (
+		!(await confirmDestructive(
+			`Roll back the upgrade of fabric:/${item.entity.appName}${target}?`,
+			'Upgrade domains already upgraded go back to the previous version. The rollback runs as UnmonitoredAuto.',
+			'Roll Back',
+			'soft',
+		))
+	) {
+		return;
+	}
+	await runMutation(ctx, `Rolling back the upgrade of fabric:/${item.entity.appName}…`, () =>
+		client.rollbackApplicationUpgrade(item.entity.appId ?? ''),
+	);
+};
+
+const changeUpgradeMode: EntityHandler = async (ctx, item, client) => {
+	const progress = await upgradeInProgress(item, client);
+	if (!progress) return;
+	const current = String(progress.RollingUpgradeMode ?? '');
+	const modes = [
+		{ label: 'Monitored', description: 'Health checks after each upgrade domain; rolls back on failure', value: 'Monitored' },
+		{ label: 'UnmonitoredAuto', description: 'Moves through upgrade domains without health checks', value: 'UnmonitoredAuto' },
+		{ label: 'UnmonitoredManual', description: 'Waits for "Resume Upgrade" before each upgrade domain', value: 'UnmonitoredManual' },
+	].map((m) => ({ ...m, detail: m.value === current ? 'Current mode' : undefined }));
+	const picked = await vscode.window.showQuickPick(modes, { placeHolder: `Upgrade mode for fabric:/${item.entity.appName} (now ${current || 'unknown'})` });
+	if (!picked || picked.value === current) return;
+	await runMutation(ctx, `Switching the upgrade of fabric:/${item.entity.appName} to ${picked.value}…`, () =>
+		client.updateApplicationUpgrade(item.entity.appId ?? '', {
+			Name: `fabric:/${item.entity.appName}`,
+			UpgradeKind: 'Rolling',
+			UpdateDescription: { RollingUpgradeMode: picked.value, ...(picked.value === 'Monitored' ? { FailureAction: 'Rollback' } : {}) },
+		}),
+	);
 };
 
 const deleteService: EntityHandler = async (ctx, item, client) => {

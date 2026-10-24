@@ -8,6 +8,7 @@ import { runPowerShell } from '../cluster/powerShellRunner';
 import type { Logger } from '../util/logger';
 import type { ClusterTreeItem } from '../views/clustersTreeProvider';
 import { explorerUrlFor } from './clusterEntityCommands';
+import { localClusterUnsupportedReason } from '../build/serviceProjects';
 
 /** Local dev cluster size, as stored in `serviceFabric.localCluster.nodeCount`. */
 export type LocalClusterNodeCount = '1' | '5';
@@ -196,26 +197,22 @@ export async function selectActiveCluster(store: ConnectionStore): Promise<void>
 }
 
 /**
- * Explains that the local dev cluster needs Windows, and points at the help
- * guide's Docker onebox section. Runtime fallback for the `isWindows`-gated commands.
+ * Says why the local dev cluster can't run here (not Windows, or Windows on
+ * ARM) and offers to add a remote cluster. Returns `true` when it can't, so
+ * callers stop. Runtime fallback for the `isWindows`-gated commands.
  */
-function showLocalClusterUnsupported(): void {
-	vscode.window
-		.showWarningMessage(
-			'The local Service Fabric dev cluster needs the Windows Service Fabric SDK. On macOS and Linux, publish to a remote cluster, or run the Linux "onebox" cluster in Docker (x64 only; see the help guide).',
-			'Open Help Guide',
-		)
-		.then((choice) => {
-			if (choice) vscode.commands.executeCommand('serviceFabric.openHelp');
-		});
+function localClusterUnsupported(): boolean {
+	const reason = localClusterUnsupportedReason(process.platform, process.arch);
+	if (!reason) return false;
+	void vscode.window.showWarningMessage(reason, 'Add Cluster…').then((choice) => {
+		if (choice) void vscode.commands.executeCommand('serviceFabric.cluster.add');
+	});
+	return true;
 }
 
 /** `serviceFabric.cluster.startLocal`: runs the SDK's DevClusterSetup.ps1 (Windows only). */
 export async function startLocalCluster(logger: Logger, nodeCount?: LocalClusterNodeCount): Promise<void> {
-	if (process.platform !== 'win32') {
-		showLocalClusterUnsupported();
-		return;
-	}
+	if (localClusterUnsupported()) return;
 	const mode = nodeCount ?? (await pickNodeCount('Start cluster as'));
 	if (!mode) return;
 	const script = `
@@ -232,10 +229,7 @@ $cluster = Join-Path $sdk 'ClusterSetup\\DevClusterSetup.ps1'
 
 /** `serviceFabric.cluster.stopLocal`: stops FabricHostSvc (Windows only). */
 export async function stopLocalCluster(logger: Logger): Promise<void> {
-	if (process.platform !== 'win32') {
-		showLocalClusterUnsupported();
-		return;
-	}
+	if (localClusterUnsupported()) return;
 	const script = `
 $ErrorActionPreference = 'Stop'
 Stop-Service FabricHostSvc -Force -ErrorAction SilentlyContinue
@@ -251,10 +245,7 @@ Stop-Service FabricHostSvc -Force -ErrorAction SilentlyContinue
  * passes both because it has already asked.
  */
 export async function resetLocalCluster(logger: Logger, nodeCount?: LocalClusterNodeCount, confirmed = false): Promise<void> {
-	if (process.platform !== 'win32') {
-		showLocalClusterUnsupported();
-		return;
-	}
+	if (localClusterUnsupported()) return;
 	if (
 		!confirmed &&
 		(vscode.workspace.getConfiguration('serviceFabric').get<boolean>('confirmDestructiveActions') ?? true) &&
@@ -284,10 +275,7 @@ $setup = Join-Path $sdk 'ClusterSetup\\DevClusterSetup.ps1'
 
 /** `serviceFabric.cluster.switchLocalMode`: recreates the cluster in the other mode and saves it as the default. */
 export async function switchLocalClusterMode(logger: Logger): Promise<void> {
-	if (process.platform !== 'win32') {
-		showLocalClusterUnsupported();
-		return;
-	}
+	if (localClusterUnsupported()) return;
 	const mode = await pickNodeCount('Switch local cluster to');
 	if (!mode) return;
 	if (

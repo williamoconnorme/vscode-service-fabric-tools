@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import type { Logger } from '../util/logger';
-import { pickServiceKind, pickTargetClusterOs } from './addServiceCommand';
+import { confirmServiceKindOnThisPlatform, pickServiceKind, pickTargetClusterOs } from './addServiceCommand';
 import type { TargetClusterOs } from '../scaffold/addServiceTemplates';
 import { isAspNetKind, isCsharpKind } from '../scaffold/addServiceTemplates';
 import { applyCreateApplication, type CreateApplicationResult } from '../scaffold/createApplicationApply';
@@ -39,7 +39,7 @@ export async function runCreateApplicationCommand(logger: Logger): Promise<void>
 	});
 	if (!serviceName) return;
 	const choice = await pickServiceKind();
-	if (!choice) return;
+	if (!choice || !(await confirmServiceKindOnThisPlatform(choice))) return;
 	const { kind, runtime } = choice;
 	let targetFramework: string | undefined;
 	let targetOs: TargetClusterOs | undefined;

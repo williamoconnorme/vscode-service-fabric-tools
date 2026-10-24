@@ -3,6 +3,7 @@ import * as fsp from 'fs/promises';
 import * as path from 'path';
 import { resolveTargetProject, type ProjectCommandTarget, type ProjectLookup } from './buildCommands';
 import { ensureNugetRestored } from '../build/nugetRestore';
+import { preflightServiceProjects } from '../build/serviceProjectPreflight';
 import { createSfBuildTask } from '../build/sfTaskProvider';
 import { pathExists } from '../util/fs';
 import { buildPropertyMap, makeExpander, type ExpandResult } from '../project/msbuildPropertyExpander';
@@ -40,6 +41,7 @@ import type { Logger } from '../util/logger';
 import { reportClusterAuthFailure } from './clusterCommands';
 import { offerToSavePublishProfile, pickParameterFilesForCluster } from './publishProfileCommands';
 import { bumpVersionsBeforeUpgrade, savePublishBaseline } from './versionBumpFlow';
+import { buildAndPushImages, containerImagesOf } from './containerCommands';
 
 /** Absolute paths of the parameter files a publish profile pairs with. */
 interface ProfileParameterFiles {
@@ -112,6 +114,14 @@ export async function publishApplication(
 	}
 	if (restore.strategy !== 'skipped') logger.info(`NuGet restore succeeded via ${restore.strategy}.`);
 
+	if (!(await preflightServiceProjects(project, logger))) return;
+	if (vscode.workspace.getConfiguration('serviceFabric').get<boolean>('containers.buildBeforePublish') && workspaceState) {
+		const images = await containerImagesOf(project);
+		if (images.length > 0) {
+			logger.info(`Building and pushing ${images.length} container image(s) before publishing...`);
+			if (!(await buildAndPushImages(images, workspaceState, logger))) return;
+		}
+	}
 	logger.info('Packaging application...');
 	const packageTask = await createSfBuildTask(project.sfproj.path, 'Package');
 	const execution = await vscode.tasks.executeTask(packageTask);
@@ -478,6 +488,15 @@ async function deployViaRestEngine(
 						},
 						token,
 						progress: (message, increment) => progress.report({ message, increment }),
+						resolveXstoreConnectionString: (reason) =>
+							Promise.resolve(
+								vscode.window.showInputBox({
+									prompt: `${reason} Enter the image store's connection string (xstore:DefaultEndpointsProtocol=https;AccountName=…;AccountKey=…;Container=…). It isn't saved.`,
+									password: true,
+									ignoreFocusOut: true,
+									validateInput: (v) => (/AccountName=.+AccountKey=.+Container=/i.test(v) ? null : 'Needs AccountName, AccountKey and Container.'),
+								}),
+							),
 					},
 					logger,
 				),
@@ -510,7 +529,7 @@ async function readOptional(file: string | undefined): Promise<string | undefine
 }
 
 /** The saved connection for a gateway URL (same scheme, host and port), if any. */
-function findSavedConnection(connections: ConnectionStore, gateway: string): ClusterConnection | undefined {
+export function findSavedConnection(connections: ConnectionStore, gateway: string): ClusterConnection | undefined {
 	const key = (u: string): string => {
 		try {
 			const parsed = new URL(u);
@@ -530,7 +549,7 @@ function findSavedConnection(connections: ConnectionStore, gateway: string): Clu
  * get a "Start Local Cluster" offer; any profile can be force-continued.
  * Returns `undefined` to abort the deploy.
  */
-async function ensureClusterReachableForDeploy(
+export async function ensureClusterReachableForDeploy(
 	publishProfile: string,
 	_localCluster: LocalClusterManager,
 	logger: Logger,
@@ -668,7 +687,7 @@ async function handleUnreachableCluster(
  * connection's saved security settings (signing in or asking for a certificate
  * passphrase if needed) and probes the gateway.
  */
-async function ensureSavedClusterReachable(
+export async function ensureSavedClusterReachable(
 	conn: ClusterConnection,
 	logger: Logger,
 ): Promise<{ securityToken?: string; client: SfRestClient } | undefined> {
@@ -692,18 +711,22 @@ async function ensureSavedClusterReachable(
 	);
 }
 
-type PublishTarget = { kind: 'profile'; path: string } | { kind: 'cluster'; connection: ClusterConnection };
+export type PublishTarget = { kind: 'profile'; path: string } | { kind: 'cluster'; connection: ClusterConnection };
 
 /**
  * Publish profiles and saved clusters in one QuickPick, the active cluster
  * first. With no saved clusters and a single profile, that profile is used
  * without asking.
  */
-async function pickPublishTarget(profiles: string[], connections: ConnectionStore): Promise<PublishTarget | undefined> {
+export async function pickPublishTarget(
+	profiles: string[],
+	connections: ConnectionStore,
+	placeHolder = 'Publish to a publish profile or a saved cluster',
+): Promise<PublishTarget | undefined> {
 	const clusters = connections.list();
 	if (profiles.length === 0 && clusters.length === 0) {
 		vscode.window.showErrorMessage(
-			'Nothing to publish to: there are no publish profiles under PublishProfiles/ and no saved clusters. Add a cluster in the Clusters view, or add a publish profile.',
+			'There are no publish profiles under PublishProfiles/ and no saved clusters. Add a cluster in the Clusters view, or add a publish profile.',
 		);
 		return undefined;
 	}
@@ -727,7 +750,7 @@ async function pickPublishTarget(profiles: string[], connections: ConnectionStor
 			});
 		}
 	}
-	const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Publish to a publish profile or a saved cluster' });
+	const picked = await vscode.window.showQuickPick(items, { placeHolder });
 	return picked?.target;
 }
 

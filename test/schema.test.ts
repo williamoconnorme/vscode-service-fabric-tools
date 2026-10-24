@@ -163,6 +163,27 @@ test('scaffolded manifests and parameter files are schema-valid', () => {
 	}
 });
 
+test('container service scaffolds are schema-valid, with and without port and registry credentials', () => {
+	const app = buildApplicationManifestXml({ applicationName: 'App', serviceName: 'Svc', projectGuid: '00000000-0000-0000-0000-000000000000' });
+	const variants = [
+		{ containerPort: 80, registryCredentials: true },
+		{ containerPort: 8080, hostPort: 18080, registryCredentials: false },
+		{ registryCredentials: false },
+	];
+	for (const v of variants) {
+		const t = { serviceName: 'Web', serviceTypeName: 'WebType', kind: 'container' as const, version: '1.0.0', containerImage: 'reg.azurecr.io/web:1', ...v };
+		const label = JSON.stringify(v);
+		const sm = buildServiceManifestXml(t);
+		assert.deepEqual(validateDocument(sm, model), [], `ServiceManifest ${label}`);
+		assert.match(sm, /<ContainerHost>\s*<ImageName>reg\.azurecr\.io\/web:1<\/ImageName>/);
+		const patched = patchApplicationManifest(app, t);
+		assert.deepEqual(validateDocument(patched, model), [], `ApplicationManifest ${label}`);
+		assert.equal(/<RepositoryCredentials AccountName="\[Web_RegistryUserName\]" Password="\[Web_RegistryPassword\]"/.test(patched), v.registryCredentials, label);
+		assert.equal(/<Parameter Name="Web_RegistryPassword"/.test(patched), v.registryCredentials, label);
+		assert.equal(/<PortBinding ContainerPort="\d+" EndpointRef="ServiceEndpoint" \/>/.test(patched), v.containerPort !== undefined, label);
+	}
+});
+
 test('validator reports unknown elements and attributes, missing required ones and bad enum values', () => {
 	// ServiceManifest itself accepts any attribute (xs:anyAttribute); CodePackage does not.
 	const text = `<ServiceManifest xmlns="${NS}" Name="S" Custom="ok">

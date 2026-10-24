@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { ensureNugetRestored } from '../build/nugetRestore';
 import { createSfBuildTask } from '../build/sfTaskProvider';
+import { preflightServiceProjects } from '../build/serviceProjectPreflight';
 import type { ApplicationProject } from '../project/sfprojModel';
 import type { Logger } from '../util/logger';
 
@@ -63,6 +64,7 @@ export async function runBuildTarget(
 ): Promise<void> {
 	const project = await resolveTargetProject(watcher, invokedOn);
 	if (!project) return;
+	if (target !== 'Clean' && !(await preflightServiceProjects(project, logger))) return;
 	const output = logger.outputChannel;
 	const restore = await vscode.window.withProgress(
 		{

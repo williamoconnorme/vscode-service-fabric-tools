@@ -419,10 +419,20 @@ test('deployViaRest: large files go through an upload session', async () => {
 	assert.ok(calls.includes('commit true'));
 });
 
-test('deployViaRest: xstore image stores are rejected with the documented message', async () => {
+test('deployViaRest: an xstore image store without a usable connection string asks for one, and stops without it', async () => {
 	const { client, calls } = fakeClient({ imageStore: 'xstore:DefaultEndpointsProtocol=https;AccountName=x' });
-	await assert.rejects(deployViaRest(client, options(), silent), /image store \(`xstore:`\) can't be uploaded to over the HTTP gateway/);
+	const reasons: string[] = [];
+	await assert.rejects(
+		deployViaRest(client, options({ resolveXstoreConnectionString: async (r) => (reasons.push(r), undefined) }), silent),
+		/Azure Storage \(xstore:\) and no connection string was supplied/,
+	);
+	assert.match(reasons[0], /has no account key/);
 	assert.deepEqual(calls, []);
+});
+
+test('deployViaRest: other image stores are rejected with a clear message', async () => {
+	const { client } = fakeClient({ imageStore: 'ftp:somewhere' });
+	await assert.rejects(deployViaRest(client, options(), silent), /image store \(`ftp:`\) isn't supported by the REST engine/);
 });
 
 test('removeViaRest deletes every instance, then unregisters every version', async () => {

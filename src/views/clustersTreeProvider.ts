@@ -642,6 +642,8 @@ function appItem(conn: ClusterConnection, app: ApplicationInfo): ClusterTreeItem
 	}).withHealth(app.healthState);
 	const busyIcon = BUSY_APP_ICONS[app.status];
 	if (busyIcon) item.iconPath = new vscode.ThemeIcon(busyIcon, healthColor(app.healthState));
+	// Upgrading applications get the upgrade controls (Resume / Roll Back / Change Mode).
+	if (app.status === 'Upgrading') item.contextValue = 'cluster.app.upgrading';
 	item.description = `${app.typeName} ${app.typeVersion} • ${app.status}`;
 	item.tooltip = [
 		`fabric:/${app.name}`,

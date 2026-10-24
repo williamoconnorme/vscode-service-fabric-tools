@@ -496,6 +496,21 @@ export class SfRestClient {
 		await this.post(`/Applications/${applicationId}/$/Upgrade`, timeoutMs, { body: description });
 	}
 
+	/** `/Applications/{id}/$/MoveToNextUpgradeDomain`: resumes an `UnmonitoredManual` upgrade in the given upgrade domain. */
+	async moveToNextUpgradeDomain(applicationId: string, upgradeDomainName: string, timeoutMs = 60000): Promise<void> {
+		await this.post(`/Applications/${applicationId}/$/MoveToNextUpgradeDomain`, timeoutMs, { body: { UpgradeDomainName: upgradeDomainName } });
+	}
+
+	/** `/Applications/{id}/$/RollbackUpgrade`: rolls an in-progress upgrade back to the previous version. */
+	async rollbackApplicationUpgrade(applicationId: string, timeoutMs = 60000): Promise<void> {
+		await this.post(`/Applications/${applicationId}/$/RollbackUpgrade`, timeoutMs);
+	}
+
+	/** `/Applications/{id}/$/UpdateUpgrade`: changes the parameters of an in-progress upgrade. */
+	async updateApplicationUpgrade(applicationId: string, description: Record<string, unknown>, timeoutMs = 60000): Promise<void> {
+		await this.post(`/Applications/${applicationId}/$/UpdateUpgrade`, timeoutMs, { body: description });
+	}
+
 	/** `/Applications/{id}/$/GetServices/$/Create`: creates a service in an application. */
 	async createService(applicationId: string, description: Record<string, unknown>, timeoutMs = 60000): Promise<void> {
 		await this.post(`/Applications/${applicationId}/$/GetServices/$/Create`, timeoutMs, { body: description });

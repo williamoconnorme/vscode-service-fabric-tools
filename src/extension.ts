@@ -26,6 +26,8 @@ import { resolveTargetProject, runBuildTarget } from './commands/buildCommands';
 import { ensureNugetRestored } from './build/nugetRestore';
 import { publishApplication } from './commands/publishCommand';
 import { createPublishProfileFromCluster } from './commands/publishProfileCommands';
+import { encryptSecret } from './commands/encryptSecretCommand';
+import { buildAndPushContainerImages } from './commands/containerCommands';
 import { removeApplication } from './commands/removeCommand';
 import {
 	addCluster,
@@ -255,6 +257,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			'serviceFabric.cluster.changeClientCertificate',
 			(node?: Pick<ClusterTreeItem, 'connection'>) => changeClientCertificate(connections, localCluster, logger, node?.connection),
 		],
+		['serviceFabric.encryptSecret', () => encryptSecret(projects, context.workspaceState, logger)],
+		['serviceFabric.containers.buildAndPush', (arg) => buildAndPushContainerImages(projects, context.workspaceState, logger, arg)],
 		[
 			'serviceFabric.cluster.createPublishProfile',
 			(node?: Pick<ClusterTreeItem, 'connection'>) => createPublishProfileFromCluster(projects, connections, logger, node?.connection),

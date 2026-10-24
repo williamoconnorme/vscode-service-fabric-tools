@@ -177,6 +177,16 @@
                 "category": "Service Fabric"
             },
             {
+                "command": "serviceFabric.containers.buildAndPush",
+                "title": "Build and Push Container Images…",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.encryptSecret",
+                "title": "Encrypt Value with Certificate…",
+                "category": "Service Fabric"
+            },
+            {
                 "command": "serviceFabric.cluster.createPublishProfile",
                 "title": "Create Publish Profile from Cluster…",
                 "category": "Service Fabric"
@@ -310,6 +320,27 @@
             {
                 "command": "serviceFabric.cluster.deleteApplication",
                 "title": "Delete Application…",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.showUpgradeProgress",
+                "title": "Show Upgrade Progress",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.resumeUpgrade",
+                "title": "Resume Upgrade (Next Upgrade Domain)",
+                "category": "Service Fabric",
+                "icon": "$(debug-continue)"
+            },
+            {
+                "command": "serviceFabric.cluster.rollbackUpgrade",
+                "title": "Roll Back Upgrade…",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.changeUpgradeMode",
+                "title": "Change Upgrade Mode…",
                 "category": "Service Fabric"
             },
             {
@@ -510,6 +541,11 @@
                     "group": "2_package@1"
                 },
                 {
+                    "command": "serviceFabric.containers.buildAndPush",
+                    "when": "view == serviceFabric.applications && viewItem == sfproj",
+                    "group": "2_package@2"
+                },
+                {
                     "command": "serviceFabric.publish",
                     "when": "view == serviceFabric.applications && viewItem == sfproj",
                     "group": "3_deploy@1"
@@ -566,7 +602,7 @@
                 },
                 {
                     "command": "serviceFabric.debug.attachToService",
-                    "when": "view == serviceFabric.clusters && viewItem == cluster.app",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.app(\\.upgrading)?$/",
                     "group": "1_navigate@2"
                 },
                 {
@@ -576,7 +612,7 @@
                 },
                 {
                     "command": "serviceFabric.debug.autoAttachNext",
-                    "when": "view == serviceFabric.clusters && viewItem == cluster.app",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.app(\\.upgrading)?$/",
                     "group": "1_navigate@3"
                 },
                 {
@@ -650,8 +686,33 @@
                     "group": "4_destructive@1"
                 },
                 {
+                    "command": "serviceFabric.cluster.resumeUpgrade",
+                    "when": "view == serviceFabric.clusters && viewItem == cluster.app.upgrading",
+                    "group": "inline"
+                },
+                {
+                    "command": "serviceFabric.cluster.showUpgradeProgress",
+                    "when": "view == serviceFabric.clusters && viewItem == cluster.app.upgrading",
+                    "group": "3_upgrade@1"
+                },
+                {
+                    "command": "serviceFabric.cluster.resumeUpgrade",
+                    "when": "view == serviceFabric.clusters && viewItem == cluster.app.upgrading",
+                    "group": "3_upgrade@2"
+                },
+                {
+                    "command": "serviceFabric.cluster.changeUpgradeMode",
+                    "when": "view == serviceFabric.clusters && viewItem == cluster.app.upgrading",
+                    "group": "3_upgrade@3"
+                },
+                {
+                    "command": "serviceFabric.cluster.rollbackUpgrade",
+                    "when": "view == serviceFabric.clusters && viewItem == cluster.app.upgrading",
+                    "group": "3_upgrade@4"
+                },
+                {
                     "command": "serviceFabric.cluster.deleteApplication",
-                    "when": "view == serviceFabric.clusters && viewItem == cluster.app",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.app(\\.upgrading)?$/",
                     "group": "4_destructive@1"
                 },
                 {
@@ -688,6 +749,13 @@
                     "command": "serviceFabric.cluster.deleteRepairTask",
                     "when": "view == serviceFabric.clusters && viewItem == cluster.repairTask.completed",
                     "group": "4_destructive@2"
+                }
+            ],
+            "editor/context": [
+                {
+                    "command": "serviceFabric.encryptSecret",
+                    "when": "resourceLangId == xml && serviceFabric.hasProject",
+                    "group": "9_serviceFabric@1"
                 }
             ],
             "explorer/context": [
@@ -776,6 +844,22 @@
                 },
                 {
                     "command": "serviceFabric.cluster.deleteApplication",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.showUpgradeProgress",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.resumeUpgrade",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.rollbackUpgrade",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.changeUpgradeMode",
                     "when": "false"
                 },
                 {
@@ -1103,6 +1187,11 @@
                     "type": "boolean",
                     "default": true,
                     "description": "Enable in-house diagnostics for application/service manifests (parameter usage, version drift, etc.)."
+                },
+                "serviceFabric.containers.buildBeforePublish": {
+                    "type": "boolean",
+                    "default": false,
+                    "markdownDescription": "Before **Publish**, build and push the image of every container service (`docker build` + `docker push`, with `az acr login` for Azure Container Registry images), as **Build and Push Container Images…** does."
                 },
                 "serviceFabric.diagnostics.enableSchemaValidation": {
                     "type": "boolean",

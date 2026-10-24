@@ -98,9 +98,9 @@ export async function applyAddService(
 	}
 	// Create the package-root directory tree. C# kinds (physical layout) only
 	// need <csprojDir>/PackageRoot/Config/; guest kinds also need a Code/ to
-	// receive the staged executable.
+	// receive the staged executable. Container kinds have no Code/: the image is the code.
 	fs.mkdirSync(path.join(svcDir, 'Config'), { recursive: true });
-	if (!csharp) {
+	if (!csharp && template.kind !== 'container') {
 		fs.mkdirSync(path.join(svcDir, 'Code'), { recursive: true });
 	}
 	const serviceManifestPath = path.join(svcDir, 'ServiceManifest.xml');

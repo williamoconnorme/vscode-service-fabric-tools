@@ -1,7 +1,11 @@
 import * as vscode from 'vscode';
 import { resolveTargetProject, type ProjectCommandTarget, type ProjectLookup } from './buildCommands';
 import { runPowerShell } from '../cluster/powerShellRunner';
+import * as fsp from 'fs/promises';
+import * as path from 'path';
 import { createClientForConnection, getEntraAccessToken } from '../cluster/clusterAuth';
+import { parsePublishProfile } from '../deploy/deployScript';
+import { ensureClusterReachableForDeploy, ensureSavedClusterReachable, findSavedConnection, pickPublishTarget } from './publishCommand';
 import { SfAuthError } from '../cluster/sfRestClient';
 import { resolveDeployEngine } from '../deploy/deployEngine';
 import { reportClusterAuthFailure } from './clusterCommands';
@@ -32,7 +36,7 @@ function toClientConnectionEndpoint(endpoint: string): string {
 
 /**
  * `serviceFabric.remove`: tear down every instance of the project's
- * application type on the active cluster and unregister the type, through
+ * application type on a picked cluster (publish profile or saved cluster) and unregister the type, through
  * the SDK's PowerShell module or the HTTP gateway (`serviceFabric.deploy.engine`).
  */
 export async function removeApplication(
@@ -57,15 +61,24 @@ export async function removeApplication(
 		vscode.window.showErrorMessage('Application manifest could not be loaded.');
 		return;
 	}
-	const active = connections.getActive();
-	if (!active) {
-		vscode.window.showErrorMessage('No active cluster. Use "Connect to Local Cluster" first.');
-		return;
+	const removeTarget = await pickPublishTarget(project.publishProfiles, connections, 'Remove from the cluster of a publish profile, or a saved cluster');
+	if (!removeTarget) return;
+	// The saved connection behind the target: the picked cluster, or the one matching the profile's gateway.
+	let profileGateway: string | undefined;
+	if (removeTarget.kind === 'profile') {
+		try {
+			profileGateway = parsePublishProfile(await fsp.readFile(removeTarget.path, 'utf8')).httpGatewayUrl;
+		} catch (err) {
+			vscode.window.showErrorMessage(`Couldn't read ${path.basename(removeTarget.path)}: ${(err as Error).message}`);
+			return;
+		}
 	}
+	const saved = removeTarget.kind === 'cluster' ? removeTarget.connection : profileGateway ? findSavedConnection(connections, profileGateway) : undefined;
+	const where = removeTarget.kind === 'cluster' ? removeTarget.connection.label : `${path.basename(removeTarget.path)} (${profileGateway ?? 'unknown gateway'})`;
 	if (
 		(vscode.workspace.getConfiguration('serviceFabric').get<boolean>('confirmDestructiveActions') ?? true) &&
 		(await vscode.window.showWarningMessage(
-			`Remove application '${manifest.applicationTypeName}' (v${manifest.applicationTypeVersion}) from ${active.label}?`,
+			`Remove application type '${manifest.applicationTypeName}' (${manifest.applicationTypeVersion}) and all its applications from ${where}?`,
 			{ modal: true },
 			'Remove',
 		)) !== 'Remove'
@@ -74,9 +87,14 @@ export async function removeApplication(
 	}
 	const waitSeconds = vscode.workspace.getConfiguration('serviceFabric').get<number>('remove.waitSeconds') ?? 30;
 	if (engineChoice.engine === 'rest') {
-		if (!(await ensureClusterReachableForRemove(active, logger))) return;
+		const preflight =
+			removeTarget.kind === 'cluster'
+				? await ensureSavedClusterReachable(removeTarget.connection, logger)
+				: await ensureClusterReachableForDeploy(removeTarget.path, localCluster, logger, 'rest', connections);
+		if (!preflight) return;
+		const client = preflight.client;
 		logger.show();
-		logger.info(`Removing application type '${manifest.applicationTypeName}' from ${active.endpoint} over the HTTP gateway...`);
+		logger.info(`Removing application type '${manifest.applicationTypeName}' from ${client.endpoint} over the HTTP gateway...`);
 		try {
 			const removed = await vscode.window.withProgress(
 				{
@@ -85,14 +103,14 @@ export async function removeApplication(
 					cancellable: true,
 				},
 				(_progress, token) =>
-					removeViaRest(createClientForConnection(active, { interactive: true }), manifest.applicationTypeName, logger, {
+					removeViaRest(client, manifest.applicationTypeName, logger, {
 						waitSeconds: Math.max(0, Math.floor(waitSeconds)),
 						token,
 					}),
 			);
 			if (removed) {
 				vscode.window.showInformationMessage(
-					`Removed application type '${manifest.applicationTypeName}' and its instances from ${active.label}.`,
+					`Removed application type '${manifest.applicationTypeName}' and its instances from ${where}.`,
 				);
 			} else {
 				vscode.window.showWarningMessage(
@@ -106,9 +124,16 @@ export async function removeApplication(
 				vscode.window.showErrorMessage(`Remove failed: ${(err as Error).message}`);
 			}
 		}
-		await localCluster.refresh(active, { interactive: true });
+		if (saved) await localCluster.refresh(saved, { interactive: true });
 		return;
 	}
+	if (!saved) {
+		vscode.window.showErrorMessage(
+			`The PowerShell engine removes through a saved cluster connection, and none matches ${where}. Add the cluster in the Clusters view, or set serviceFabric.deploy.engine to "auto" to remove over the HTTP gateway.`,
+		);
+		return;
+	}
+	const active = saved;
 	let clientEndpoint: string;
 	try {
 		clientEndpoint = toClientConnectionEndpoint(active.endpoint);

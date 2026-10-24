@@ -52,8 +52,8 @@ export async function runAddServiceCommand(projects: SfProjectWatcher, logger: L
 		vscode.window.showErrorMessage(`Cannot add a service: ${path.basename(project.sfproj.path)} has no readable ApplicationManifest.xml.`);
 		return;
 	}
-	const choice = await pickServiceKind();
-	if (!choice) return;
+	const choice = await pickServiceKind({ containers: true });
+	if (!choice || !(await confirmServiceKindOnThisPlatform(choice))) return;
 	const { kind, runtime } = choice;
 	const existing = collectExistingServiceNames(project);
 	const serviceName = await promptServiceName(project, existing);
@@ -72,7 +72,11 @@ export async function runAddServiceCommand(projects: SfProjectWatcher, logger: L
 	if (!version) return;
 	let template: AddServiceTemplate = { serviceName, serviceTypeName, kind, runtime, version };
 	let guestSourcePath: string | undefined;
-	if (kind === 'guest') {
+	if (kind === 'container') {
+		const container = await promptContainerSettings(serviceName);
+		if (!container) return;
+		template = { ...template, ...container };
+	} else if (kind === 'guest') {
 		guestSourcePath = await pickGuestPayload();
 		if (!guestSourcePath) return;
 		const args = await vscode.window.showInputBox({
@@ -191,7 +195,7 @@ async function pickProjectForAddService(
  * Shows the grouped service-kind picker shared by Add Service and Create
  * Application. Resolves to `undefined` when the user dismisses it.
  */
-export async function pickServiceKind(): Promise<ServiceKindChoice | undefined> {
+export async function pickServiceKind(options: { containers?: boolean } = {}): Promise<ServiceKindChoice | undefined> {
 	const items: (vscode.QuickPickItem & { choice?: ServiceKindChoice })[] = [
 		{ kind: vscode.QuickPickItemKind.Separator, label: '.NET Core' },
 		{
@@ -250,6 +254,16 @@ export async function pickServiceKind(): Promise<ServiceKindChoice | undefined> 
 			detail: 'No code generated; copies the supplied binary or folder into Code/.',
 			choice: { kind: 'guest', runtime: 'netcore' },
 		},
+		...(options.containers
+			? [
+					{
+						label: 'Container',
+						description: 'Runs a Docker image as a stateless service',
+						detail: 'No code generated; the ServiceManifest references the image, with optional port binding and registry credentials.',
+						choice: { kind: 'container' as const, runtime: 'netcore' as const },
+					},
+				]
+			: []),
 	];
 	return (
 		await vscode.window.showQuickPick(items, {
@@ -258,6 +272,17 @@ export async function pickServiceKind(): Promise<ServiceKindChoice | undefined> 
 			matchOnDetail: true,
 		})
 	)?.choice;
+}
+
+/** Off Windows, warns that a .NET Framework service can't be built here. `false` when the user backs out. */
+export async function confirmServiceKindOnThisPlatform(choice: ServiceKindChoice): Promise<boolean> {
+	if (process.platform === 'win32' || !isCsharpKind(choice.kind) || isAspNetKind(choice.kind) || choice.runtime !== 'netfx') return true;
+	const proceed = await vscode.window.showWarningMessage(
+		`.NET Framework services can only be built on Windows, so Build, Package and Publish won't work for this service on ${process.platform === 'darwin' ? 'macOS' : 'Linux'}.`,
+		{ modal: true, detail: 'Pick the .NET Core variant to build here, or scaffold it anyway and build on Windows.' },
+		'Scaffold Anyway',
+	);
+	return proceed === 'Scaffold Anyway';
 }
 
 async function promptServiceName(project: ApplicationProject, existing: Set<string>): Promise<string | undefined> {
@@ -274,6 +299,38 @@ async function promptServiceName(project: ApplicationProject, existing: Set<stri
 						: null
 				: 'Use letters, digits, dot, dash or underscore (must start with a letter).',
 	});
+}
+
+/** Image, port and registry credentials for a container service; `undefined` on cancel. */
+async function promptContainerSettings(
+	serviceName: string,
+): Promise<Pick<AddServiceTemplate, 'containerImage' | 'containerPort' | 'registryCredentials'> | undefined> {
+	const containerImage = await vscode.window.showInputBox({
+		prompt: 'Container image',
+		placeHolder: 'myregistry.azurecr.io/web:1.0.0',
+		ignoreFocusOut: true,
+		validateInput: (v) => (/^[^\s]+$/.test(v.trim()) ? null : 'Enter an image name, e.g. myregistry.azurecr.io/web:1.0.0'),
+	});
+	if (!containerImage) return undefined;
+	const port = await vscode.window.showInputBox({
+		prompt: 'Port the container listens on (leave blank if it serves nothing)',
+		value: '80',
+		validateInput: (v) => (v.trim() === '' || (/^\d{1,5}$/.test(v.trim()) && +v > 0 && +v <= 65535) ? null : 'Use a TCP port (1–65535) or leave blank.'),
+	});
+	if (port === undefined) return undefined;
+	const registry = await vscode.window.showQuickPick(
+		[
+			{ label: 'Public image', description: 'No registry credentials', value: false },
+			{
+				label: 'Private registry',
+				description: `Credentials from the ${serviceName}_RegistryUserName / ${serviceName}_RegistryPassword application parameters`,
+				value: true,
+			},
+		],
+		{ placeHolder: 'Does pulling the image need registry credentials?' },
+	);
+	if (!registry) return undefined;
+	return { containerImage: containerImage.trim(), containerPort: port.trim() ? Number(port) : undefined, registryCredentials: registry.value };
 }
 
 /** Asks for the guest payload (single file or folder); resolves to its path. */
@@ -309,6 +366,7 @@ function formatAddServiceSummary(
 	guestExePath: string | undefined,
 ): string {
 	const sfprojName = path.basename(project.sfproj.path);
+	if (kind === 'container') return `Added container service '${serviceName}' to ${sfprojName}.`;
 	if (kind === 'guest') {
 		return (
 			`Added guest service '${serviceName}' to ${sfprojName}` +

@@ -4,12 +4,13 @@
  * Kept free of any `vscode` or `fs` imports so they can be unit-tested under
  * the node test runner.
  */
+import { actorUnixFixTarget } from '../build/serviceProjects';
 
 /** The service kinds the scaffolder knows how to generate. */
-export type ServiceKind = 'stateless' | 'stateful' | 'actor' | 'guest' | 'aspNetStateless' | 'aspNetStateful';
+export type ServiceKind = 'stateless' | 'stateful' | 'actor' | 'guest' | 'container' | 'aspNetStateless' | 'aspNetStateful';
 
-/** Kinds that generate a companion C# project (everything except `guest`). */
-export type CsharpServiceKind = Exclude<ServiceKind, 'guest'>;
+/** Kinds that generate a companion C# project (everything except `guest` and `container`). */
+export type CsharpServiceKind = Exclude<ServiceKind, 'guest' | 'container'>;
 
 /** Kinds that host an ASP.NET Core (Kestrel) pipeline. */
 export type AspNetServiceKind = 'aspNetStateless' | 'aspNetStateful';
@@ -61,6 +62,14 @@ export interface AddServiceTemplate {
 	guestWorkingFolder?: string;
 	/** ASP.NET kinds only: adds a second, https endpoint. */
 	httpsEndpoint?: HttpsEndpointOptions;
+	/** `container` only: the image to run, e.g. `myregistry.azurecr.io/web:1.0`. */
+	containerImage?: string;
+	/** `container` only: the port the container listens on; published through the service endpoint. */
+	containerPort?: number;
+	/** `container` only: the endpoint's (host) port; defaults to {@link containerPort}. */
+	hostPort?: number;
+	/** `container` only: pull with registry credentials from the `<Service>_RegistryUserName` / `_RegistryPassword` parameters. */
+	registryCredentials?: boolean;
 	rootNamespace?: string;
 	targetFramework?: string;
 	serviceFabricSdkVersion?: string;
@@ -128,7 +137,49 @@ function effectiveHttpsEndpoint(t: AddServiceTemplate): EffectiveHttpsEndpoint |
  * the template into the C# template builders without further narrowing.
  */
 export function isCsharpKind(kind: ServiceKind): kind is CsharpServiceKind {
-	return kind !== 'guest';
+	return kind !== 'guest' && kind !== 'container';
+}
+
+/** Application parameters a container service's registry credentials read from. */
+export function registryCredentialParameters(serviceName: string): { userName: string; password: string } {
+	return { userName: `${serviceName}_RegistryUserName`, password: `${serviceName}_RegistryPassword` };
+}
+
+/**
+ * ServiceManifest.xml for a container service: a stateless type with an
+ * implicit host, a `<ContainerHost>` code package and, when the container
+ * listens on a port, an endpoint the application manifest binds it to.
+ */
+function buildContainerServiceManifestXml(t: AddServiceTemplate): string {
+	const endpoint = t.endpointName ?? 'ServiceEndpoint';
+	const port = t.hostPort ?? t.containerPort;
+	const resources =
+		t.containerPort !== undefined
+			? `
+  <Resources>
+    <Endpoints>
+      <Endpoint Name="${endpoint}" Protocol="http" UriScheme="http" Port="${port}" />
+    </Endpoints>
+  </Resources>`
+			: '';
+	return `<?xml version="1.0" encoding="utf-8"?>
+<ServiceManifest Name="${t.serviceName}Pkg" Version="${t.version}"
+                 xmlns="http://schemas.microsoft.com/2011/01/fabric"
+                 xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+                 xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ServiceTypes>
+    <StatelessServiceType ServiceTypeName="${t.serviceTypeName}" UseImplicitHost="true" />
+  </ServiceTypes>
+  <CodePackage Name="Code" Version="${t.version}">
+    <EntryPoint>
+      <ContainerHost>
+        <ImageName>${escapeXml(t.containerImage ?? '')}</ImageName>
+      </ContainerHost>
+    </EntryPoint>
+  </CodePackage>
+  <ConfigPackage Name="Config" Version="${t.version}" />${resources}
+</ServiceManifest>
+`;
 }
 
 /** Returns true when the kind uses a stateful service type at the manifest level. */
@@ -172,6 +223,7 @@ function defaultParametersFor(template: AddServiceTemplate): ParameterDeclaratio
  * Generates a new ServiceManifest.xml body for the chosen service kind.
  */
 export function buildServiceManifestXml(t: AddServiceTemplate): string {
+	if (t.kind === 'container') return buildContainerServiceManifestXml(t);
 	const endpoint = t.endpointName ?? 'ServiceEndpoint';
 	const exe = t.exeProgram ?? (t.targetOs === 'linux' && isCsharpKind(t.kind) ? t.serviceName : `${t.serviceName}.exe`);
 	let typeElem: string;
@@ -383,9 +435,15 @@ export function patchApplicationManifestImports(xml: string, t: AddServiceTempla
 	// 1. Patch <Parameters>. Only ASP.NET kinds contribute a parameter here
 	//    (`<Folder>_ASPNETCORE_ENVIRONMENT`); instance/replica counts go to
 	//    StartupServices.xml.
+	const registry = registryCredentialParameters(t.serviceName);
 	const aspNetParam: ParameterDeclaration[] = isAspNetKind(t.kind)
 		? [{ name: `${t.serviceName}_ASPNETCORE_ENVIRONMENT`, defaultValue: '' }]
-		: [];
+		: t.kind === 'container' && t.registryCredentials
+			? [
+					{ name: registry.userName, defaultValue: '' },
+					{ name: registry.password, defaultValue: '' },
+				]
+			: [];
 	const fresh = aspNetParam.filter((p) => !new RegExp(`<Parameter\\s+Name="${escapeRegex(p.name)}"`, 'i').test(out));
 	if (fresh.length > 0) {
 		const newParamLines = fresh.map((p) => `    <Parameter Name="${p.name}" DefaultValue="${p.defaultValue}" />`).join(`
@@ -425,6 +483,19 @@ ${newParamLines}
     <EnvironmentOverrides CodePackageRef="code">
       <EnvironmentVariable Name="ASPNETCORE_ENVIRONMENT" Value="[${t.serviceName}_ASPNETCORE_ENVIRONMENT]" />
     </EnvironmentOverrides>
+  `;
+	} else if (t.kind === 'container') {
+		const policies = [
+			t.registryCredentials
+				? `        <RepositoryCredentials AccountName="[${registry.userName}]" Password="[${registry.password}]" PasswordEncrypted="false" />`
+				: '',
+			t.containerPort !== undefined ? `        <PortBinding ContainerPort="${t.containerPort}" EndpointRef="${t.endpointName ?? 'ServiceEndpoint'}" />` : '',
+		].filter(Boolean);
+		importBody = `
+    <ConfigOverrides />
+    <Policies>
+      <ContainerHostPolicies CodePackageRef="Code">${policies.length ? `\n${policies.join('\n')}\n      ` : ''}</ContainerHostPolicies>
+    </Policies>
   `;
 	} else {
 		// stateless / stateful / guest
@@ -1471,6 +1542,8 @@ export function buildCsharpCsproj(t: AddServiceTemplate, paths?: CsharpProjectPa
   </ItemGroup>
 `
 			: '';
+	// .NET actor hosts: make FabActUtil's manifest generation work on macOS / Linux.
+	const actorUnixFix = t.kind === 'actor' && s.runtime === 'netcore' ? `\n${actorUnixFixTarget()}\n` : '';
 	return `<Project Sdk="${sdk}">
 
   <PropertyGroup>${outputTypeProp}
@@ -1480,7 +1553,7 @@ export function buildCsharpCsproj(t: AddServiceTemplate, paths?: CsharpProjectPa
   <ItemGroup>
 ${packageRefs.join(`
 `)}
-  </ItemGroup>${actorInterfacesRef}
+  </ItemGroup>${actorInterfacesRef}${actorUnixFix}
 </Project>
 `;
 }

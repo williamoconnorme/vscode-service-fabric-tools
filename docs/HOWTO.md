@@ -135,6 +135,7 @@ Right-click menus follow the entity:
 | Cluster | **Open in Service Fabric Explorer**, **Show Details** (version, health, upgrade progress, load), **Show Health**, **Show Cluster Manifest**, **Show Diagnostic Events**, **Disconnect** |
 | Application type / version | **Show Details** (default parameters, service types), **Unprovision Application Type…** |
 | Application | **Attach Debugger to Deployed Service…**, **Auto-attach Debugger Next Deploy**, **Show Details**, **Show Health**, **Delete Application…** |
+| Upgrading application | **Show Upgrade Progress**, **Resume Upgrade (Next Upgrade Domain)** (also an inline button; for `UnmonitoredManual` upgrades waiting between domains), **Change Upgrade Mode…** (Monitored / UnmonitoredAuto / UnmonitoredManual), **Roll Back Upgrade…** |
 | Service | **Show Details** (description), **Show Health**, **Scale Service…** (instance count / target replica set size), **Delete Service…** |
 | Partition | **Show Details** (load), **Show Health**, **Reset Partition Load**, **Recover Partition from Quorum Loss…** (stateful) |
 | Replica / instance | **Show Details** (host-side detail), **Show Health**, **Restart Replica** (stateful), **Remove Replica / Instance…** |
@@ -188,6 +189,20 @@ Place the caret on a `[Parameter]` reference (e.g. `"[MyService_InstanceCount]"`
 - **Promote literal to parameter** — Hover a literal value (e.g. `InstanceCount="3"`) and apply the lightbulb action. The extension adds a `<Parameter>` to the manifest and rewrites the literal as `[MyService_InstanceCount]`.
 
 ---
+
+### 4.5 Encrypting secrets
+
+**Service Fabric: Encrypt Value with Certificate…** (command palette, or right-click in an XML file) encrypts a value for `IsEncrypted="true"` settings and parameters, or a container registry password with `PasswordEncrypted="true"`, on any OS. It does what `Invoke-ServiceFabricEncryptText` does on Windows: the value is encrypted for the cluster's secrets certificate (CMS / PKCS#7, AES-256), and the cluster decrypts it with the certificate's private key.
+
+1. Pick the certificate's **public** file (`.cer`, `.crt` or `.pem`, PEM or DER). The last one used is remembered. If the application manifest declares a `<SecretsCertificate>` with a different thumbprint, you're warned.
+2. Type the value (it's masked and never logged).
+3. In an XML editor the encrypted text replaces the selection; elsewhere it's copied to the clipboard.
+
+```xml
+<Parameter Name="DbPassword" IsEncrypted="true" Value="MIIB…" />
+```
+
+The certificate must be installed on the cluster nodes, and declared in `ApplicationManifest.xml` (`<Certificates><SecretsCertificate X509FindValue="…" Name="…" /></Certificates>`) so the service can read it.
 
 ## 5. Building, rebuilding, cleaning, packaging
 
@@ -248,6 +263,13 @@ On macOS / Linux the order differs. Strategy 1 runs only when `mono` is on `PATH
 
 If all three fail, you'll see a modal error pointing at the install / manual restore / connectivity remediations. Subprocess output streams to the **Service Fabric** output channel.
 
+### 5.5 Building on macOS and Linux
+
+Before Build, Rebuild, Package and Publish off Windows, the extension checks the application's service projects:
+
+- **.NET Framework services** (`net4x`) only build on Windows. The build stops and names them. Scaffolding one off Windows warns first.
+- **Actor services** generate their service manifest with `FabActUtil` during the build. The Service Fabric Actors build targets write `FabActUtil.runtimeconfig.json` with a `cmd.exe`-style `echo` whose quotes `sh` strips, so the file isn't valid JSON and the build fails on macOS and Linux. New .NET actor projects include a small `SfFixFabActUtilRuntimeConfig` target that rewrites the file correctly (it does nothing on Windows). For existing actor projects the extension offers **Fix and Continue**, which adds the same target to the `.csproj`.
+
 ---
 
 ## 6. Local development cluster lifecycle
@@ -276,15 +298,9 @@ The command:
 
 Right-click a cluster → **Open in Service Fabric Explorer** opens the SF web UI in your default browser (`http://localhost:19080/Explorer/index.html` for local, or the saved gateway endpoint for remote). On any other row in the **Clusters** view the same command deep-links to that application, service, partition, replica, node or code package in Explorer.
 
-### 6.4 macOS / Linux: Docker "onebox"
+### 6.4 macOS, Linux and Windows on ARM
 
-There is no local dev cluster for macOS. For a throwaway cluster, Microsoft publishes a Linux "onebox" container image (`mcr.microsoft.com/service-fabric/onebox`). Limitations:
-
-- **x64 only.** On Apple Silicon it runs under emulation, slowly and unreliably. A small remote dev cluster is usually the better choice.
-- It is a **Linux** cluster, so services must be built for `linux-x64` (pick *Linux* as the target cluster OS when scaffolding, see §11.1).
-- Debug attach doesn't work, because the processes live inside the container.
-
-Once it is running, **Connect to Local Cluster** (or **Connect to Remote Cluster…** with `http://localhost:19080`) and publish with a `Local.*` profile. The REST engine is used automatically.
+The local dev cluster needs the Service Fabric SDK, which only exists for Windows x64. On macOS, Linux and Windows on ARM the local-cluster commands are hidden, and running one anyway explains this and offers **Add Cluster…**: publish to a remote (dev) cluster instead. Docker "onebox" clusters aren't supported.
 
 ---
 
@@ -422,9 +438,9 @@ To override the application parameters (advanced — useful for ad-hoc debug run
 
 ### 8.2 Remove
 
-Right-click a `.sfproj` → **Remove Application**. A confirmation dialog appears unless `serviceFabric.confirmDestructiveActions: false`.
+Right-click a `.sfproj` → **Remove Application**, then pick where to remove it from: a publish profile's cluster or a saved cluster, the same list as Publish (the active cluster first). A confirmation dialog appears unless `serviceFabric.confirmDestructiveActions: false`.
 
-The extension uses the same client-TCP-port translation as the deploy flow (HTTP `19080` → client `19000`) and the same pre-flight cluster probe, then runs the SDK PowerShell teardown strictly bottom-up:
+With the REST engine (the default) Remove talks to that cluster's HTTP gateway with the profile's or connection's security settings. With the PowerShell engine it needs a saved connection for the cluster. The PowerShell engine uses the same client-TCP-port translation as the deploy flow (HTTP `19080` → client `19000`) and the same pre-flight cluster probe, then runs the SDK PowerShell teardown strictly bottom-up:
 
 1. **Replicas / instances** — `Get-ServiceFabricPartition` → `Get-ServiceFabricReplica` → `Remove-ServiceFabricReplica -ForceRemove` per replica/instance, evicting stuck replicas so the service-level remove doesn't time out.
 2. **Services** — `Remove-ServiceFabricService -Force -ForceRemove` per service.
@@ -444,9 +460,13 @@ The deploy uploads the contents of `pkg\\<Configuration>\\<ApplicationTypeName>`
 
 The REST engine reproduces `Publish-NewServiceFabricApplication` / `Publish-UpgradedServiceFabricApplication` with gateway calls, so the same publish profile works from any OS:
 
-1. **Image store check.** Reads `ImageStoreConnectionString` from the cluster manifest. Only `fabric:ImageStore` (the default for Azure clusters) can be uploaded to over HTTP. For `file:` or `xstore:` stores Publish stops with a message suggesting the PowerShell engine (Windows) or `sfctl application upload`.
+1. **Image store.** Reads `ImageStoreConnectionString` from the cluster manifest:
+   - `fabric:ImageStore` (the default for Azure clusters): uploaded through the HTTP gateway.
+   - `file:<folder>`: copied straight into the folder when this machine can reach it (typically an older local dev cluster).
+   - `xstore:` (Azure Storage): uploaded to the storage container with the account key (Blob service, Shared Key; files over 8 MB in blocks). When the cluster manifest encrypts the connection string, Publish asks for it (it isn't saved).
+   - Anything else stops with a message suggesting the PowerShell engine (Windows) or `sfctl application upload`.
 2. **Decide.** If the type version isn't registered, upload and provision it. If the application doesn't exist, create it. If it exists at the same version, apply **`serviceFabric.deploy.overwriteBehavior`** (default `SameAppTypeAndVersion`: delete the application, re-register the version, recreate). If it exists at an older version, upgrade when the profile has `<UpgradeDeployment Enabled="true">`; otherwise `Always` replaces it and the other values fail with an explanation.
-3. **Upload** to `/ImageStore/<Type>_<Version>_<random>`, four files at a time. Files over 4 MB go in 4 MB chunks through an upload session. The progress notification is cancellable. The overall time limit is the profile's `CopyPackageTimeoutSec`, else `serviceFabric.deploy.copyPackageTimeoutSec` (600 s). `CompressPackage` isn't supported yet; the package is uploaded uncompressed.
+3. **Upload** to `/ImageStore/<Type>_<Version>_<random>`, four files at a time. Files over 4 MB go in 4 MB chunks through an upload session. The progress notification is cancellable. The overall time limit is the profile's `CopyPackageTimeoutSec`, else `serviceFabric.deploy.copyPackageTimeoutSec` (600 s). With the profile's `<CopyPackageParameters CompressPackage="true">`, each code / config / data package folder is uploaded as `<Name>.zip`, as `Copy-ServiceFabricApplicationPackage -CompressPackage` does (packages up to 4 GB).
 4. **Provision**, then **create** or **upgrade**. For upgrades, the profile's `<UpgradeDeployment Mode>` and `<Parameters>` (`FailureAction`, `HealthCheck*Sec`, `UpgradeDomainTimeoutSec`, `UpgradeTimeoutSec`, `UpgradeReplicaSetCheckTimeoutSec`, `ForceRestart`, `ConsiderWarningAsError`, `MaxPercentUnhealthyDeployedApplications`, `DefaultServiceTypeHealthPolicy`) map onto the REST upgrade description. Unsupported keys are logged and ignored. Upgrade-domain progress streams to the output channel, and a rollback is reported as a failure.
 5. **StartupServices.xml.** After a fresh create, each `<Service>` in `StartupServices.xml` (parameters from the profile's `StartupServiceParameterFile`) that doesn't exist yet is created, matching the PowerShell script. Default services in `ApplicationManifest.xml` are created by the cluster.
 6. **Clean up.** The uploaded package is deleted from the image store on success, failure and cancellation. A version that was registered by a deploy that then failed is unregistered.
@@ -474,7 +494,7 @@ Entra ID profiles sign in as usual. With the REST engine, the token is used in-p
 
 Service Fabric services are long-running host processes. Debugging means **attaching** to that process while the cluster is running, not launching a new one. The extension handles the discovery + attach for you.
 
-Attach works by process ID, so the service has to run on this machine: the local dev cluster on Windows. For remote clusters (and the Docker onebox on macOS / Linux) the command explains that instead of starting a failing session.
+Attach works by process ID, so the service has to run on this machine: the local dev cluster on Windows. For remote clusters the command explains that instead of starting a failing session.
 
 ### 9.2 From the Clusters tree (recommended)
 
@@ -551,7 +571,7 @@ Diagnostic events require the `EventStoreService` system service to be enabled o
 
 1. **Application type name** — e.g. `Voting`. Becomes the folder + project + manifest name.
 2. **Initial service name** — e.g. `Voting.Web`. Becomes the package folder name (`<name>Pkg`) and the service type name (`<name>Type`).
-3. **Service kind** — same 9-item grouped picker as **Add Service** (see §11.2). Defaults to *Stateless Service (.NET Core)* to match historical behaviour.
+3. **Service kind** — the **Add Service** picker (see §11.2) without **Container**. Defaults to *Stateless Service (.NET Core)* to match historical behaviour.
 4. **Target framework** *(C# kinds only)* — `net10.0` / `net8.0` for `.NET Core` and ASP.NET, `net472` / `net48` for `.NET Framework`.
 5. **Target cluster OS** *(.NET Core and ASP.NET kinds)* — **Windows** (`win-x64`, `<Program><Svc>.exe</Program>`) or **Linux** (`linux-x64`, `<Program><Svc></Program>`). **Add New Service…** asks the same question.
 6. **Target folder** — defaults to the workspace root.
@@ -592,12 +612,12 @@ Notes:
 
 ### 11.2 Add a service
 
-**Service Fabric: Add New Service…** adds a new service package to an existing application project, mirroring Visual Studio's *Add → New Service Fabric Service…* dialog (same grouped 9-item layout). You can run it from the command palette or right-click a `.sfproj` in the **Applications** view.
+**Service Fabric: Add New Service…** adds a new service package to an existing application project, mirroring Visual Studio's *Add → New Service Fabric Service…* dialog (the same grouped layout, plus **Container**). You can run it from the command palette or right-click a `.sfproj` in the **Applications** view.
 
 What the wizard prompts for:
 
 1. **Target project** — skipped when there is exactly one `.sfproj` in the workspace, or when invoked from a tree node.
-2. **Service kind** — 9-item grouped picker:
+2. **Service kind** — 10-item grouped picker (Container is described in §11.2.1):
 
    | Group | Kind | Generated artifacts |
    |---|---|---|
@@ -677,6 +697,18 @@ Kestrel resolves the ASP.NET Core HTTPS development certificate the first time t
 The standalone command is idempotent — already-trusted certs short-circuit on `dotnet dev-certs https --check` alone. It detects expired / expiring (within `serviceFabric.devCert.expirationWarningDays`, default 30 days) / untrusted certs and offers a regenerate-and-trust path. On Windows this surfaces a UAC prompt; on macOS a keychain prompt; on Linux trust is per-distro manual (the command generates the cert and surfaces a docs link).
 
 If you rename `ServiceHttpsEndpoint` in the generated `ServiceManifest.xml`, also update the `GetEndpoint("ServiceHttpsEndpoint")` literal in the listener factory — otherwise the host throws at startup.
+
+### 11.2.1 Container services
+
+Pick **Container** under *Hosted Containers and Applications* to run a Docker image as a stateless service. The wizard asks for:
+
+1. **Image**, e.g. `myregistry.azurecr.io/web:1.0.0`.
+2. **Port** the container listens on (blank if it serves nothing). It becomes a `ServiceEndpoint` with a `<PortBinding>`.
+3. **Registry credentials**: for a private registry, `<RepositoryCredentials>` reads `<Service>_RegistryUserName` and `<Service>_RegistryPassword` application parameters. Set them in `ApplicationParameters/*.xml`; encrypt the password with **Encrypt Value with Certificate…** (§4.5) and set `PasswordEncrypted="true"`.
+
+No code is generated and the package has no `Code/` folder: the image is the code.
+
+**Build and Push Container Images…** (right-click a `.sfproj`, or the palette) builds each container service's image with `docker build` and pushes it with `docker push`. Azure Container Registry images sign in first with `az acr login`. You're asked once which Dockerfile builds each image (the build context is the Dockerfile's folder). Set **`serviceFabric.containers.buildBeforePublish`** to do this before every Publish. It needs Docker (and the Azure CLI for ACR) on this machine.
 
 ### 11.3 Remove a service
 
@@ -773,6 +805,7 @@ Idempotent — running it twice is safe; the second run reports zero consumers u
 | `serviceFabric.deploy.promptForApplicationParameters` | `false` | When `true`, Publish asks which `ApplicationParameters\<env>.xml` to splat over the profile's defaults. When `false` (default), Publish uses the file paired with the publish profile via its `<ApplicationParameterFile>` element — a 5-node profile automatically pulls the 5-node parameters. See §8.1. |
 | `serviceFabric.deploy.engine` | `auto` | `auto` (PowerShell on Windows, REST elsewhere), `powershell` (Windows only), or `rest` (HTTP gateway, no SDK). See §8.1 / §8.4. |
 | `serviceFabric.deploy.overwriteBehavior` | `SameAppTypeAndVersion` | REST engine: what Publish does when the application exists and isn't being upgraded. `SameAppTypeAndVersion` replaces it only at the same version, `Always` replaces it whenever, `Never` fails. The PowerShell engine keeps the behavior of `Deploy-FabricApplication.ps1`. |
+| `serviceFabric.containers.buildBeforePublish` | `false` | Build and push container service images before Publish. See §11.2.1. |
 | `serviceFabric.deploy.autoBumpVersions` | `prompt` | `prompt` / `always` / `never`. Before an upgrade, raise the versions of changed packages, their service manifests and the application type when needed. See §8.1. |
 | `serviceFabric.deploy.upgradeMode` | `Monitored` | Upgrade mode for publishes to a saved cluster (no profile): `Monitored`, `UnmonitoredAuto`, `UnmonitoredManual`, or `Disabled` to replace instead. See §8.1. |
 | `serviceFabric.deploy.copyPackageTimeoutSec` | `600` | REST engine: overall time limit for the image-store upload. The profile's `CopyPackageTimeoutSec` takes precedence. |
@@ -800,6 +833,9 @@ All commands live under the **Service Fabric** category in the command palette.
 | Connect to Local Cluster / Connect to Remote Cluster… | Adds a connection. |
 | Disconnect | Removes a saved connection. |
 | Change Client Certificate… | Picks a new X.509 client certificate for a cluster, checks the gateway accepts it, and saves it. See §7.2. |
+| Encrypt Value with Certificate… | Encrypts a value for `IsEncrypted` / `PasswordEncrypted` with the cluster's secrets certificate. See §4.5. |
+| Build and Push Container Images… | `docker build` + `docker push` (with `az acr login` for ACR) for container services. See §11.2.1. |
+| Show Upgrade Progress / Resume Upgrade / Change Upgrade Mode… / Roll Back Upgrade… | Controls for an application that is upgrading (Clusters view). See §3.2. |
 | Create Publish Profile from Cluster… | Writes a `PublishProfiles\*.xml` for a saved cluster (endpoint, certificate thumbprints or Entra ID flag, paired parameter files) and adds it to the `.sfproj`. See §8.1. |
 | Select Active Cluster | Picks which connection drives deploy/attach/events. |
 | Start / Stop / Reset Local Cluster | Local SDK cluster lifecycle (Windows only). |
@@ -900,7 +936,7 @@ No network calls beyond:
 ## 16. FAQ
 
 **Does this work on macOS / Linux?**
-Yes, for everything except the local dev cluster and debug attach. Authoring works everywhere. Build and Package use `dotnet msbuild` (.NET services only). Publish and Remove use the REST engine against a remote cluster's HTTP gateway, with unsecured, server-certificate, X.509 client-certificate and Entra ID clusters all supported (§8.4). The local dev cluster and attaching the debugger need Windows. For a local cluster on macOS / Linux see the Docker onebox notes in §6.4.
+Yes, for everything except the local dev cluster and debug attach. Authoring works everywhere. Build and Package use `dotnet msbuild` (.NET services only). Publish and Remove use the REST engine against a remote cluster's HTTP gateway, with unsecured, server-certificate, X.509 client-certificate and Entra ID clusters all supported (§8.4). The local dev cluster and attaching the debugger need Windows x64 (§6.4). .NET Framework services only build on Windows; .NET actor services build everywhere (§5.5).
 
 **Do I need an XML extension?**
 No. Manifest completion, hover and validation are built in (§4.1), so `redhat.vscode-xml` (and its Java / native language server) is no longer installed as a dependency. You can still install it for general XML editing.

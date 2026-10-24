@@ -54,7 +54,7 @@ export async function attachToDeployedService(
 		vscode.window.showWarningMessage(
 			process.platform === 'win32'
 				? `Attach requires the service to run on this machine. ${connection.label} is a remote cluster, so its processes run on other nodes.`
-				: "Attach requires the service to run on this machine. On macOS and Linux, services run on remote nodes or inside the Docker onebox container, which the debugger can't reach by process ID.",
+				: "Attach requires the service to run on this machine, which needs the local dev cluster on Windows. On macOS and Linux, services run on remote cluster nodes, which the debugger can't reach by process ID.",
 		);
 		return;
 	}
