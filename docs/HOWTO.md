@@ -104,14 +104,14 @@ MyApp.sfproj
 
 ### 3.2 Clusters view
 
-Every saved connection (local + remote) appears here, with status icons:
+Every saved connection (local + remote) appears here. The icon shows its state, and the row its node and application counts; hover for the endpoint, security settings and health:
 
 | Icon | Meaning |
 |---|---|
-| `$(check)` green | Connected, cluster health = `Ok` |
-| `$(warning)` yellow | Connected, health = `Warning` |
-| `$(error)` red | Connected, health = `Error` |
-| `$(circle-slash)` | Disconnected / unreachable |
+| Server, green | Connected, cluster health `Ok` |
+| Server, yellow | Connected, health `Warning` |
+| Server, red | Connected, health `Error` |
+| Disconnect, dimmed | Disconnected / unreachable |
 
 Expanding a connected cluster shows the same hierarchy as Service Fabric Explorer, fetched live from the gateway as you expand each level:
 

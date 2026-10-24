@@ -108,7 +108,10 @@ export class ClusterTreeItem extends vscode.TreeItem {
 		this.appName = entity.appName;
 		switch (kind) {
 			case 'cluster':
-				this.iconPath = new vscode.ThemeIcon('server', healthColor(connection?.connected ? connection.aggregatedHealthState : undefined));
+				// Connected: coloured by health. Disconnected: a dimmed "disconnected" icon.
+				this.iconPath = connection?.connected
+					? new vscode.ThemeIcon('server', healthColor(connection.aggregatedHealthState))
+					: new vscode.ThemeIcon('debug-disconnect', new vscode.ThemeColor('disabledForeground'));
 				this.contextValue = connection ? (connection.connected ? 'cluster.connected' : 'cluster.disconnected') : 'cluster';
 				break;
 			case 'group':
@@ -879,12 +882,12 @@ function escapeRegExp(text: string): string {
 	return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/** Node and application counts; the endpoint is in the tooltip, and the icon shows connection state and health. */
 function describeCluster(conn: ClusterConnection): string {
-	if (!conn.connected) return `${conn.endpoint} (disconnected)`;
+	if (!conn.connected) return '';
 	const nodeCount = conn.nodes?.length ?? 0;
 	const appCount = conn.deployedApplications?.length ?? 0;
-	const topology = nodeCount === 1 ? '1-node' : nodeCount === 5 ? '5-node' : `${nodeCount}-node`;
-	return `${conn.endpoint} • ${topology} • ${conn.aggregatedHealthState ?? 'Unknown'} • ${appCount} app${appCount === 1 ? '' : 's'}`;
+	return `${nodeCount}-node • ${appCount} app${appCount === 1 ? '' : 's'}`;
 }
 
 function clusterTooltip(conn: ClusterConnection): string {
