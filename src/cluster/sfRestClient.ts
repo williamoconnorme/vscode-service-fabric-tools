@@ -53,16 +53,38 @@ export interface DeployedCodePackageInfo {
 	hostType: string;
 }
 
+/** Entra ID configuration a cluster publishes at `/$/GetAadMetadata`. */
+export interface AadMetadata {
+	authority: string;
+	/** Client (native/public) application ID registered for the cluster. */
+	clientApplicationId: string;
+	/** Cluster (web API) application ID: the token audience. */
+	clusterApplicationId: string;
+	tenantId: string;
+}
+
+/** Transport and auth hooks for {@link SfRestClient}. */
+export interface SfRestClientOptions {
+	/** Agent for https requests, e.g. one that pins the server certificate. */
+	agent?: https.Agent;
+	/** Returns a bearer token for Entra-secured clusters, or `undefined` for none. */
+	getAccessToken?: () => Promise<string | undefined>;
+}
+
 /**
  * Minimal Service Fabric HTTP gateway client.
  * Uses native http/https — no external deps.
  *
- * For HTTPS clusters (X.509/AAD) the caller would need to inject TLS options;
- * the local dev cluster runs on http://localhost:19080 by default which makes
- * an immediate end-to-end smoke test trivial.
+ * Secured clusters are reached through {@link SfRestClientOptions}: an agent
+ * that pins the cluster's (usually self-signed) server certificate, and a
+ * token callback for Entra ID. Use `createClusterClient` rather than building
+ * one by hand for a saved connection.
  */
 export class SfRestClient {
-	constructor(readonly endpoint: string) {}
+	constructor(
+		readonly endpoint: string,
+		private readonly options: SfRestClientOptions = {},
+	) {}
 
 	apiVersion = '6.0';
 
@@ -200,12 +222,36 @@ export class SfRestClient {
 		return this.get(pathAndQuery, timeoutMs);
 	}
 
+	/**
+	 * Reads the cluster's Entra ID configuration. The endpoint is anonymous, so no
+	 * token is sent. Returns `undefined` for clusters that don't use Entra ID.
+	 */
+	async getAadMetadata(timeoutMs = 5000): Promise<AadMetadata | undefined> {
+		const json = await this.get('/$/GetAadMetadata', timeoutMs, { apiVersion: '1.0', anonymous: true });
+		const meta = json?.metadata;
+		if (String(json?.type ?? '').toLowerCase() !== 'aad' || !meta?.cluster || !meta?.tenant) return undefined;
+		return {
+			authority: String(meta.authority ?? ''),
+			clientApplicationId: String(meta.client ?? ''),
+			clusterApplicationId: String(meta.cluster),
+			tenantId: String(meta.tenant),
+		};
+	}
+
 	// Resolves with the parsed JSON body (or undefined for an empty body). Typed `any`
 	// because gateway payloads are untyped JSON that callers probe with optional chaining.
-	private get(pathAndQuery: string, timeoutMs: number): Promise<any> {
+	private async get(pathAndQuery: string, timeoutMs: number, opts: { apiVersion?: string; anonymous?: boolean } = {}): Promise<any> {
 		const sep = pathAndQuery.includes('?') ? '&' : '?';
-		const requestUrl = new url.URL(`${this.endpoint}${pathAndQuery}${sep}api-version=${this.apiVersion}`);
-		const lib = requestUrl.protocol === 'https:' ? https : http;
+		const requestUrl = new url.URL(`${this.endpoint}${pathAndQuery}${sep}api-version=${opts.apiVersion ?? this.apiVersion}`);
+		const isHttps = requestUrl.protocol === 'https:';
+		const lib = isHttps ? https : http;
+		const headers: Record<string, string> = { Accept: 'application/json' };
+		const token = opts.anonymous ? undefined : await this.options.getAccessToken?.();
+		if (token) {
+			// Never send a bearer token in clear text.
+			if (!isHttps) throw new Error(`Refusing to send an Entra ID token over plain HTTP to ${requestUrl.host}; use an https:// endpoint.`);
+			headers.Authorization = `Bearer ${token}`;
+		}
 		return new Promise((resolve, reject) => {
 			const req = lib.request(
 				{
@@ -213,14 +259,19 @@ export class SfRestClient {
 					hostname: requestUrl.hostname,
 					port: requestUrl.port || (requestUrl.protocol === 'https:' ? 443 : 80),
 					path: `${requestUrl.pathname}${requestUrl.search}`,
-					headers: { Accept: 'application/json' },
+					headers,
 					timeout: timeoutMs,
+					...(isHttps && this.options.agent ? { agent: this.options.agent } : {}),
 				},
 				(res) => {
 					const chunks: Buffer[] = [];
 					res.on('data', (c) => chunks.push(Buffer.from(c)));
 					res.on('end', () => {
 						const body = Buffer.concat(chunks).toString('utf8');
+						if (res.statusCode === 401 || res.statusCode === 403) {
+							reject(new SfAuthError(res.statusCode, requestUrl.href, body));
+							return;
+						}
 						if (!res.statusCode || res.statusCode >= 400) {
 							reject(new Error(`HTTP ${res.statusCode} from ${requestUrl.href}: ${body}`));
 							return;
@@ -237,6 +288,22 @@ export class SfRestClient {
 			req.on('timeout', () => req.destroy(new Error(`Request to ${requestUrl.href} timed out after ${timeoutMs}ms`)));
 			req.end();
 		});
+	}
+}
+
+/** The gateway rejected the request's credentials (HTTP 401/403). */
+export class SfAuthError extends Error {
+	constructor(
+		readonly statusCode: number,
+		requestUrl: string,
+		body: string,
+	) {
+		super(
+			statusCode === 401
+				? `The cluster at ${new url.URL(requestUrl).host} requires authentication (HTTP 401).${body ? ` ${body}` : ''}`
+				: `Access denied by the cluster at ${new url.URL(requestUrl).host} (HTTP 403). Your account may not have a role on this cluster.${body ? ` ${body}` : ''}`,
+		);
+		this.name = 'SfAuthError';
 	}
 }
 

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import type { ConnectionStore } from '../cluster/connectionStore';
-import { SfRestClient } from '../cluster/sfRestClient';
+import { createClientForConnection } from '../cluster/clusterAuth';
 import type { Logger } from '../util/logger';
 
 /** One EventStore record as returned by `/EventsStore/Cluster/Events` (parsed JSON, rendered by the webview as-is). */
@@ -81,7 +81,8 @@ export class DiagnosticEventsPanel implements vscode.Disposable {
 			this.postState({ connected: false, events: [], message: 'No active cluster connection.' });
 			return;
 		}
-		const client = new SfRestClient(active.endpoint);
+		// Polls in the background, so never prompt for sign-in here.
+		const client = createClientForConnection(active);
 		const start = new Date(Date.now() - LOOKBACK_MS).toISOString();
 		const end = new Date().toISOString();
 		try {

@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
 import { resolveTargetProject, type ProjectCommandTarget, type ProjectLookup } from './buildCommands';
 import { runPowerShell } from '../cluster/powerShellRunner';
-import { SfRestClient } from '../cluster/sfRestClient';
-import type { ClusterKind, ConnectionStore } from '../cluster/connectionStore';
+import { createClientForConnection, getEntraAccessToken } from '../cluster/clusterAuth';
+import { SfAuthError } from '../cluster/sfRestClient';
+import type { ClusterConnection, ConnectionStore } from '../cluster/connectionStore';
 import type { LocalClusterManager } from '../cluster/localCluster';
 import type { Logger } from '../util/logger';
 
@@ -70,7 +71,16 @@ export async function removeApplication(
 		vscode.window.showErrorMessage(`Cannot derive a client connection endpoint from ${active.endpoint}: ${(err as Error).message}`);
 		return;
 	}
-	if (!(await ensureClusterReachableForRemove(active.endpoint, active.kind, logger))) return;
+	if (!(await ensureClusterReachableForRemove(active, logger))) return;
+	let securityToken: string | undefined;
+	if (active.auth) {
+		try {
+			securityToken = await getEntraAccessToken(active.auth, true);
+		} catch (err) {
+			vscode.window.showErrorMessage(`Microsoft Entra ID sign-in failed: ${(err as Error).message}`);
+			return;
+		}
+	}
 	const script = `
 $ErrorActionPreference = 'Stop'
 try {
@@ -78,7 +88,11 @@ try {
 } catch {
     throw "The 'ServiceFabric' PowerShell module isn't available. Install the Service Fabric SDK and restart VS Code so it picks up the updated PSModulePath. Inner error: $($_.Exception.Message)"
 }
-$null = Connect-ServiceFabricCluster -ConnectionEndpoint $ClientEndpoint -TimeoutSec 10
+if ($env:SF_VSCODE_SECURITY_TOKEN) {
+    $null = Connect-ServiceFabricCluster -ConnectionEndpoint $ClientEndpoint -AzureActiveDirectory -SecurityToken $env:SF_VSCODE_SECURITY_TOKEN -ServerCertThumbprint ($ServerCertThumbprint -split ',') -TimeoutSec 10
+} else {
+    $null = Connect-ServiceFabricCluster -ConnectionEndpoint $ClientEndpoint -TimeoutSec 10
+}
 
 # 1-3. Find every application instance of this type (named or otherwise),
 # walk replicas \u2192 services \u2192 application for each.
@@ -157,16 +171,23 @@ if ($stillThere.Count -gt 0) {
 	logger.show();
 	logger.info(`Connecting to ${clientEndpoint} (client TCP) for remove...`);
 	const waitSeconds = vscode.workspace.getConfiguration('serviceFabric').get<number>('remove.waitSeconds') ?? 30;
-	const result = await runPowerShell(logger, script, {
-		ClientEndpoint: clientEndpoint,
-		ApplicationTypeName: manifest.applicationTypeName,
-		WaitSeconds: String(Math.max(0, Math.floor(waitSeconds))),
-	});
+	const result = await runPowerShell(
+		logger,
+		script,
+		{
+			ClientEndpoint: clientEndpoint,
+			ApplicationTypeName: manifest.applicationTypeName,
+			WaitSeconds: String(Math.max(0, Math.floor(waitSeconds))),
+			ServerCertThumbprint: active.serverCert?.thumbprints.join(','),
+		},
+		undefined,
+		securityToken ? { env: { SF_VSCODE_SECURITY_TOKEN: securityToken } } : {},
+	);
 	if (result.exitCode === 0) {
 		vscode.window.showInformationMessage(
 			`Removed application type '${manifest.applicationTypeName}' and its instances from ${active.label}.`,
 		);
-		await localCluster.refresh(active);
+		await localCluster.refresh(active, { interactive: true });
 	} else {
 		vscode.window.showErrorMessage(`Remove failed (exit code ${result.exitCode}). See the Service Fabric output channel.`);
 	}
@@ -177,15 +198,20 @@ if ($stillThere.Count -gt 0) {
  * failed probe, local clusters get a "Start Local Cluster" offer; any cluster
  * can be force-continued. Returns `false` to abort.
  */
-async function ensureClusterReachableForRemove(endpoint: string, kind: ClusterKind, logger: Logger): Promise<boolean> {
+async function ensureClusterReachableForRemove(connection: ClusterConnection, logger: Logger): Promise<boolean> {
+	const { endpoint, kind } = connection;
 	logger.info(`Probing cluster gateway ${endpoint}...`);
-	const client = new SfRestClient(endpoint);
+	const client = createClientForConnection(connection, { interactive: true });
 	try {
 		await client.getClusterHealth(5000);
 		logger.info('Cluster probe ok.');
 		return true;
 	} catch (err) {
 		logger.warn(`Cluster probe failed: ${(err as Error).message}`);
+		if (err instanceof SfAuthError) {
+			vscode.window.showErrorMessage(`${err.message} Reconnect to the cluster to sign in again.`);
+			return false;
+		}
 	}
 	if (kind === 'local') {
 		const choice = await vscode.window.showErrorMessage(

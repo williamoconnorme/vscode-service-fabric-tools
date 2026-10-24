@@ -174,7 +174,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		],
 		['serviceFabric.remove', (arg) => removeApplication(projects, connections, localCluster, logger, arg)],
 		['serviceFabric.cluster.connectLocal', () => connectLocalCluster(localCluster)],
-		['serviceFabric.cluster.connectRemote', () => connectRemoteCluster(connections, localCluster)],
+		['serviceFabric.cluster.connectRemote', () => connectRemoteCluster(connections, localCluster, logger)],
 		['serviceFabric.cluster.disconnect', (node?: ClusterTreeItem) => disconnectCluster(connections, node?.connection)],
 		['serviceFabric.cluster.selectActive', () => selectActiveCluster(connections)],
 		['serviceFabric.cluster.startLocal', () => startLocalCluster(logger)],

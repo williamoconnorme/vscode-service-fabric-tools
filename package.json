@@ -539,6 +539,11 @@
                     ],
                     "description": "Which PowerShell host to use. 'auto' prefers Windows PowerShell on Windows (required by SF SDK), pwsh elsewhere."
                 },
+                "serviceFabric.entra.clientId": {
+                    "type": "string",
+                    "default": "",
+                    "markdownDescription": "Client (application) ID used to sign in to clusters secured with Microsoft Entra ID.\n\n- Empty (default): VS Code's built-in Microsoft sign-in. Your tenant must allow it to request access to the cluster's application.\n- `cluster`: the client application registered in the cluster's Entra ID configuration. Its app registration needs `http://localhost` as a mobile and desktop redirect URI.\n- Any other value: that application ID, e.g. your own app registration."
+                },
                 "serviceFabric.confirmDestructiveActions": {
                     "type": "boolean",
                     "default": true,

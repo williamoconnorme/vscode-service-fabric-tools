@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import type { ClusterConnection, ConnectionStore } from './connectionStore';
-import { SfRestClient } from './sfRestClient';
+import { createClientForConnection } from './clusterAuth';
 
 /** Minimal logger surface used here (structurally matches util/logger's Logger). */
 interface LocalClusterLogger {
@@ -40,9 +40,12 @@ export class LocalClusterManager {
 		return refreshed;
 	}
 
-	/** Probes the cluster, stores the updated connection and returns it. Never throws for probe failures. */
-	async refresh(conn: ClusterConnection): Promise<ClusterConnection> {
-		const client = new SfRestClient(conn.endpoint);
+	/**
+	 * Probes the cluster, stores the updated connection and returns it. Never throws for probe failures.
+	 * `interactive` lets an Entra ID cluster prompt for sign-in; background refreshes leave it off.
+	 */
+	async refresh(conn: ClusterConnection, opts: { interactive?: boolean } = {}): Promise<ClusterConnection> {
+		const client = createClientForConnection(conn, opts);
 		try {
 			const health = await client.getClusterHealth(5000);
 			const apps = await client.getDeployedApplications(5000).catch(() => []);

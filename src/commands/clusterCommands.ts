@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import type { ClusterConnection, ConnectionStore } from '../cluster/connectionStore';
 import type { LocalClusterManager } from '../cluster/localCluster';
+import { configureClusterSecurity, type ClusterSecurity } from '../cluster/clusterAuth';
 import { runPowerShell } from '../cluster/powerShellRunner';
 import type { Logger } from '../util/logger';
 
@@ -43,7 +44,12 @@ export async function connectLocalCluster(local: LocalClusterManager): Promise<v
 }
 
 /** `serviceFabric.cluster.connectRemote` */
-export async function connectRemoteCluster(store: ConnectionStore, local: LocalClusterManager): Promise<void> {
+/**
+ * `serviceFabric.cluster.connectRemote`: saves a remote cluster connection. For https
+ * endpoints it offers to pin an untrusted server certificate, and for clusters secured
+ * with Microsoft Entra ID it signs in through VS Code's Microsoft account provider.
+ */
+export async function connectRemoteCluster(store: ConnectionStore, local: LocalClusterManager, logger: Logger): Promise<void> {
 	const endpoint = await vscode.window.showInputBox({
 		prompt: 'Enter Service Fabric HTTP gateway endpoint',
 		placeHolder: 'https://my-cluster.eastus.cloudapp.azure.com:19080',
@@ -57,6 +63,18 @@ export async function connectRemoteCluster(store: ConnectionStore, local: LocalC
 		},
 	});
 	if (!endpoint) return;
+	let security: ClusterSecurity | undefined;
+	try {
+		security = await vscode.window.withProgress(
+			{ location: vscode.ProgressLocation.Notification, title: `Checking security settings of ${new URL(endpoint).host}…` },
+			() => configureClusterSecurity(endpoint, logger),
+		);
+	} catch (err) {
+		logger.warn(`Cluster security check failed: ${(err as Error).message}`);
+		vscode.window.showErrorMessage(`Couldn't connect to ${endpoint}: ${(err as Error).message}`);
+		return;
+	}
+	if (!security) return;
 	const label = await vscode.window.showInputBox({
 		prompt: 'Display name for this cluster',
 		value: new URL(endpoint).hostname,
@@ -68,11 +86,15 @@ export async function connectRemoteCluster(store: ConnectionStore, local: LocalC
 		endpoint,
 		kind: 'remote',
 		connected: false,
+		...security,
 	};
 	await store.upsert(conn);
 	await store.setActive(conn.id);
 	// LocalClusterManager.refresh probes any endpoint, not only the local one.
-	await local.refresh(conn);
+	const refreshed = await local.refresh(conn, { interactive: true });
+	const via = conn.auth ? ' using Microsoft Entra ID' : '';
+	if (refreshed.connected) vscode.window.showInformationMessage(`Connected to ${label}${via}.`);
+	else vscode.window.showWarningMessage(`Saved ${label}, but couldn't reach it${via}. See the Service Fabric output channel.`);
 }
 
 /** `serviceFabric.cluster.disconnect`: removes the given (or active) connection. */

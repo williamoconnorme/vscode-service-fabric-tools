@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 
 import type { ClusterNodeInfo, DeployedApplicationInfo } from './sfRestClient';
+import type { EntraClusterAuth } from './clusterAuth';
+import type { ServerCertPin } from './tlsPinning';
 
 export type { ClusterNodeInfo, DeployedApplicationInfo };
 
@@ -16,6 +18,10 @@ export interface ClusterConnection {
 	aggregatedHealthState?: string;
 	deployedApplications?: DeployedApplicationInfo[];
 	nodes?: ClusterNodeInfo[];
+	/** Set for clusters secured with Microsoft Entra ID. */
+	auth?: EntraClusterAuth;
+	/** Pinned gateway certificate for https clusters. */
+	serverCert?: ServerCertPin;
 }
 
 const STORE_KEY = 'serviceFabric.connections';

@@ -25,7 +25,8 @@ import {
 	type PublishProfileSummary,
 } from '../deploy/deployScript';
 import { runPowerShell } from '../cluster/powerShellRunner';
-import { SfRestClient } from '../cluster/sfRestClient';
+import { SfAuthError, type SfRestClient } from '../cluster/sfRestClient';
+import { configureClusterSecurity, createClusterClient, getEntraAccessToken } from '../cluster/clusterAuth';
 import type { ConnectionStore } from '../cluster/connectionStore';
 import type { LocalClusterManager } from '../cluster/localCluster';
 import type { AutoAttachTelemetry } from '../debug/autoAttachState';
@@ -244,8 +245,13 @@ Continuing will publish the wrong application. This choice is not remembered.`,
 			return;
 		}
 	}
-	const wrapper = buildDeployWrapper({ applicationParameter, startupServicesFile: project.startupServicesManifest });
-	if (!(await ensureClusterReachableForDeploy(publishProfile, localCluster, logger))) return;
+	const preflight = await ensureClusterReachableForDeploy(publishProfile, localCluster, logger);
+	if (!preflight) return;
+	const wrapper = buildDeployWrapper({
+		applicationParameter,
+		startupServicesFile: project.startupServicesManifest,
+		useSecurityToken: preflight.securityToken !== undefined,
+	});
 	if (project.startupServicesManifest) {
 		logger.info('StartupServices.xml found \u2014 services declared in it will be created after the application is registered.');
 	} else {
@@ -264,12 +270,12 @@ Continuing will publish the wrong application. This choice is not remembered.`,
 			...(project.startupServicesManifest ? { StartupServicesFile: project.startupServicesManifest } : {}),
 		},
 		undefined,
-		{ capture: true },
+		{ capture: true, ...(preflight.securityToken ? { env: { SF_VSCODE_SECURITY_TOKEN: preflight.securityToken } } : {}) },
 	);
 	if (result.exitCode === 0) {
 		vscode.window.showInformationMessage('Service Fabric deployment completed successfully.');
 		const active = connections.getActive();
-		if (active) await localCluster.refresh(active);
+		if (active) await localCluster.refresh(active, { interactive: true });
 		if (active && workspaceState && telemetry && project.applicationManifest) {
 			try {
 				const { maybeAutoAttachAfterDeploy } = await import('../debug/autoAttachAfterDeploy');
@@ -280,6 +286,7 @@ Continuing will publish the wrong application. This choice is not remembered.`,
 						applicationName,
 						applicationTypeName,
 						clusterEndpoint: active.endpoint,
+						clusterSecurity: { auth: active.auth, serverCert: active.serverCert },
 						clusterKind: active.kind === 'local' ? 'local' : 'remote',
 						memento: workspaceState,
 					},
@@ -304,35 +311,65 @@ Continuing will publish the wrong application. This choice is not remembered.`,
 /**
  * Pre-flight: probe the HTTP gateway inferred from the publish profile. A
  * profile that can't be parsed, or has no inferable gateway, skips the probe.
- * On failure, local profiles get a "Start Local Cluster" offer; any profile
- * can be force-continued. Returns `false` to abort the deploy.
+ * Profiles that use Microsoft Entra ID (`AzureActiveDirectory="true"`) sign in
+ * first and return the token for the deploy script. On failure, local profiles
+ * get a "Start Local Cluster" offer; any profile can be force-continued.
+ * Returns `undefined` to abort the deploy.
  */
 async function ensureClusterReachableForDeploy(
 	publishProfile: string,
 	_localCluster: LocalClusterManager,
 	logger: Logger,
-): Promise<boolean> {
+): Promise<{ securityToken?: string } | undefined> {
 	let profile: PublishProfileSummary;
 	try {
 		const xml = await fsp.readFile(publishProfile, 'utf8');
 		profile = parsePublishProfile(xml);
 	} catch (err) {
-		logger.warn(`Skipping cluster probe \u2014 failed to parse publish profile: ${(err as Error).message}`);
-		return true;
+		logger.warn(`Skipping cluster probe — failed to parse publish profile: ${(err as Error).message}`);
+		return {};
 	}
 	const gateway = profile.httpGatewayUrl;
 	if (!gateway) {
-		logger.warn('Skipping cluster probe \u2014 no HTTP gateway could be inferred from the publish profile.');
-		return true;
+		logger.warn('Skipping cluster probe — no HTTP gateway could be inferred from the publish profile.');
+		return {};
+	}
+	let client: SfRestClient = createClusterClient(gateway);
+	let securityToken: string | undefined;
+	if (profile.usesEntra) {
+		try {
+			const security = await configureClusterSecurity(gateway, logger, profile.serverCertThumbprints);
+			if (!security) return undefined;
+			if (!security.auth) {
+				vscode.window.showErrorMessage(
+					`The publish profile uses Microsoft Entra ID, but the cluster at ${gateway} doesn't report an Entra ID configuration.`,
+				);
+				return undefined;
+			}
+			securityToken = await getEntraAccessToken(security.auth, true);
+			client = createClusterClient(gateway, security, { interactive: true });
+		} catch (err) {
+			logger.error(`Microsoft Entra ID sign-in for ${gateway} failed: ${(err as Error).message}`);
+			vscode.window.showErrorMessage(`Microsoft Entra ID sign-in for ${gateway} failed: ${(err as Error).message}`);
+			return undefined;
+		}
 	}
 	logger.info(`Probing cluster gateway ${gateway}...`);
-	const client = new SfRestClient(gateway);
 	try {
 		await client.getClusterHealth(5000);
 		logger.info('Cluster probe ok.');
-		return true;
+		return { securityToken };
 	} catch (err) {
 		logger.warn(`Cluster probe failed: ${(err as Error).message}`);
+		if (err instanceof SfAuthError) {
+			const proceed =
+				(await vscode.window.showErrorMessage(
+					`${err.message} Check the publish profile's ClusterConnectionParameters and your access to the cluster.`,
+					{ modal: true },
+					'Continue Anyway',
+				)) === 'Continue Anyway';
+			return proceed ? { securityToken } : undefined;
+		}
 	}
 	if (profile.isLocal) {
 		const choice = await vscode.window.showErrorMessage(
@@ -346,25 +383,25 @@ async function ensureClusterReachableForDeploy(
 			try {
 				await client.getClusterHealth(10000);
 				logger.info('Cluster probe ok after start.');
-				return true;
+				return {};
 			} catch (err) {
 				vscode.window.showErrorMessage(`Cluster still unreachable after start: ${(err as Error).message}. Aborting deploy.`);
-				return false;
+				return undefined;
 			}
 		}
 		if (choice === 'Continue Anyway') {
 			logger.warn('Continuing deploy despite cluster probe failure (user override).');
-			return true;
+			return {};
 		}
-		return false;
+		return undefined;
 	}
-	return (
-		(await vscode.window.showErrorMessage(
-			`Service Fabric cluster at ${gateway} isn't responding. Verify the publish profile's ClusterConnectionParameters and certificate settings.`,
-			{ modal: true },
-			'Continue Anyway',
-		)) === 'Continue Anyway'
-	);
+	return (await vscode.window.showErrorMessage(
+		`Service Fabric cluster at ${gateway} isn't responding. Verify the publish profile's ClusterConnectionParameters and certificate settings.`,
+		{ modal: true },
+		'Continue Anyway',
+	)) === 'Continue Anyway'
+		? { securityToken }
+		: undefined;
 }
 
 /** The only profile when there is one; otherwise a QuickPick. */

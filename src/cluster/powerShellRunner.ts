@@ -6,6 +6,12 @@ import { buildScriptWithParameters, type PowerShellParameterValue } from './powe
 export interface RunPowerShellOptions {
 	/** Also collect stdout+stderr into {@link PowerShellResult.output}. */
 	capture?: boolean;
+	/**
+	 * Extra environment variables for the script, read as `$env:NAME`. Use these for
+	 * secrets such as access tokens: `parameters` end up on the process command line,
+	 * which other local processes can read.
+	 */
+	env?: Record<string, string>;
 }
 
 export interface PowerShellResult {
@@ -33,7 +39,7 @@ export async function runPowerShell(
 	logger.info(`Running ${executable} (script length ${command.length} chars)`);
 	const captured: string[] | undefined = options.capture ? [] : undefined;
 	return new Promise((resolve, reject) => {
-		const child = cp.spawn(executable, args, { windowsHide: true });
+		const child = cp.spawn(executable, args, { windowsHide: true, env: options.env ? { ...process.env, ...options.env } : undefined });
 		token?.onCancellationRequested(() => child.kill('SIGTERM'));
 		const onData = (chunk: Buffer): void => {
 			const text = chunk.toString();

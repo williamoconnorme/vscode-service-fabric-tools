@@ -347,6 +347,13 @@ export function buildPublishProfileXml(env: EnvironmentName): string {
     Replace the connection endpoint and certificate fields below with the values
     for your remote cluster. See https://aka.ms/sfpublishprofile for the full
     reference.
+
+    For a cluster secured with Microsoft Entra ID, use these parameters instead:
+      <ClusterConnectionParameters ConnectionEndpoint=""
+                                   AzureActiveDirectory="true"
+                                   ServerCertThumbprint="" />
+    Publish signs you in with your VS Code Microsoft account and passes the
+    token to Deploy-FabricApplication.ps1.
   -->
   <ClusterConnectionParameters ConnectionEndpoint=""
                                X509Credential="true"

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import type { ClusterConnection, ConnectionStore } from '../cluster/connectionStore';
-import { SfRestClient, type DeployedApplicationInfo, type DeployedCodePackageInfo } from '../cluster/sfRestClient';
+import type { DeployedApplicationInfo, DeployedCodePackageInfo } from '../cluster/sfRestClient';
+import { createClientForConnection } from '../cluster/clusterAuth';
 import { buildAttachConfig } from './attachConfig';
 import {
 	CANCEL_BUTTON_LABEL,
@@ -46,7 +47,7 @@ export async function attachToDeployedService(
 		vscode.window.showWarningMessage('Connect to a Service Fabric cluster before attaching a debugger.');
 		return;
 	}
-	const client = new SfRestClient(connection.endpoint);
+	const client = createClientForConnection(connection, { interactive: true });
 	const apps: DeployedApplicationInfo[] = connection.deployedApplications ?? (await client.getDeployedApplications().catch(() => []));
 	if (apps.length === 0) {
 		vscode.window.showWarningMessage('No deployed applications were found on the active cluster.');

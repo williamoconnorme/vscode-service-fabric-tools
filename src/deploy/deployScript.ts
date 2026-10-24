@@ -18,6 +18,8 @@
  *    inputs we need to pass for a default deploy.
  */
 
+import { parseThumbprintList } from '../cluster/tlsPinning';
+
 const PARAM_RE = /<Parameter\b[^>]*\bName\s*=\s*"([^"]+)"[^>]*\bValue\s*=\s*"([^"]*)"[^>]*\/?>/gi;
 const PARAM_RE_VALUE_FIRST = /<Parameter\b[^>]*\bValue\s*=\s*"([^"]*)"[^>]*\bName\s*=\s*"([^"]+)"[^>]*\/?>/gi;
 
@@ -66,6 +68,11 @@ export interface DeployWrapperOptions {
 	applicationParameter?: Record<string, string>;
 	/** When set, the wrapper forwards `$StartupServicesFile` as `-StartupServicesFile`. */
 	startupServicesFile?: string;
+	/**
+	 * When set, the wrapper forwards `$env:SF_VSCODE_SECURITY_TOKEN` as `-SecurityToken`
+	 * so an Entra ID profile connects without the SDK's interactive sign-in dialog.
+	 */
+	useSecurityToken?: boolean;
 }
 
 /**
@@ -121,6 +128,11 @@ export function buildDeployWrapper(opts: DeployWrapperOptions = {}): string {
 		// `runPowerShell`, so the value isn't embedded in the literal here.
 		lines.push(`$splat['StartupServicesFile'] = $StartupServicesFile`);
 	}
+	if (opts.useSecurityToken) {
+		// Read from the environment, not a script parameter, so the token never
+		// appears on the PowerShell command line.
+		lines.push(`$splat['SecurityToken'] = $env:SF_VSCODE_SECURITY_TOKEN`);
+	}
 	// Dot-source — NOT &-invoke — so Connect-ServiceFabricCluster's state
 	// lives in the same scope as the SDK helper's connection lookup.
 	lines.push(`. $DeployScript @splat`);
@@ -146,6 +158,10 @@ export interface PublishProfileSummary {
 	applicationParameterFile: string | undefined;
 	/** `<StartupServiceParameterFile Path>` verbatim (relative to the profile's directory). */
 	startupServiceParameterFile: string | undefined;
+	/** True when the profile connects with `AzureActiveDirectory="true"` (Microsoft Entra ID). */
+	usesEntra?: boolean;
+	/** Normalized `ServerCertThumbprint` values (comma-separated in the profile during rollover). */
+	serverCertThumbprints?: string[];
 }
 
 /**
@@ -185,6 +201,8 @@ export function parsePublishProfile(xml: string): PublishProfileSummary {
 		httpGatewayUrl,
 		applicationParameterFile: appParamFile,
 		startupServiceParameterFile: startupParamFile,
+		usesEntra: /\bAzureActiveDirectory\s*=\s*"true"/i.test(attrs),
+		serverCertThumbprints: parseThumbprintList(ATTR_RE('ServerCertThumbprint').exec(attrs)?.[1]),
 	};
 }
 
@@ -212,11 +230,14 @@ function inferHttpGateway(endpoint: string, attrs: string): string | undefined {
 			return undefined;
 		}
 	}
-	// host:port → swap to gateway port 19080. X509-secured clusters → https.
+	// host:port → swap to gateway port 19080. X509- and Entra ID-secured clusters → https.
 	const hostPort = /^([^:\s]+):(\d+)$/.exec(endpoint);
 	if (!hostPort) return undefined;
 	const host = hostPort[1];
-	const isSecure = /\bX509Credential\s*=\s*"true"/i.test(attrs) || /\bAadCredential\s*=\s*"true"/i.test(attrs);
+	const isSecure =
+		/\bX509Credential\s*=\s*"true"/i.test(attrs) ||
+		/\bAzureActiveDirectory\s*=\s*"true"/i.test(attrs) ||
+		/\bAadCredential\s*=\s*"true"/i.test(attrs);
 	const scheme = isSecure ? 'https' : 'http';
 	return `${scheme}://${host}:19080`;
 }

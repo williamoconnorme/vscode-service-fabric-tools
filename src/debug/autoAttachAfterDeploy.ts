@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import type { ClusterKind } from '../cluster/connectionStore';
-import { SfRestClient } from '../cluster/sfRestClient';
+import { createClusterClient, type ClusterSecurity } from '../cluster/clusterAuth';
 import { ensureDebuggerAvailable } from './attachCommand';
 import {
 	runAutoAttach,
@@ -19,6 +19,8 @@ export interface AutoAttachDeployInfo {
 	applicationTypeName: string;
 	clusterEndpoint: string;
 	clusterKind: ClusterKind;
+	/** Pinned certificate and Entra ID settings of the cluster, if any. */
+	clusterSecurity?: ClusterSecurity;
 	/** Workspace-state Memento holding the one-shot and prompt-shown flags. */
 	memento: vscode.Memento;
 }
@@ -61,7 +63,7 @@ export async function maybeAutoAttachAfterDeploy(
 		50,
 		DEFAULT_AUTO_ATTACH_MAX_SESSIONS,
 	);
-	const client = new SfRestClient(info.clusterEndpoint);
+	const client = createClusterClient(info.clusterEndpoint, info.clusterSecurity, { interactive: true });
 	const ctx: AutoAttachContext = {
 		applicationName: info.applicationName,
 		applicationTypeName: info.applicationTypeName,
