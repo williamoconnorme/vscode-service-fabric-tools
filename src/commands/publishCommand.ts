@@ -346,7 +346,7 @@ async function ensureClusterReachableForDeploy(
 				);
 				return undefined;
 			}
-			securityToken = await getEntraAccessToken(security.auth, true);
+			securityToken = await getEntraAccessToken(security.auth, true, logger);
 			client = createClusterClient(gateway, security, { interactive: true });
 		} catch (err) {
 			logger.error(`Microsoft Entra ID sign-in for ${gateway} failed: ${(err as Error).message}`);

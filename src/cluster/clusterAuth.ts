@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import type { ClusterConnection } from './connectionStore';
 import { SfRestClient, type AadMetadata } from './sfRestClient';
 import { PinnedCertAgent, probeServerCertificate, type ServerCertPin } from './tlsPinning';
+import { getAzureCliToken } from './azureCliToken';
 import type { Logger } from '../util/logger';
 
 /** Microsoft Entra ID settings for a cluster, taken from its `/$/GetAadMetadata`. */
@@ -35,11 +36,22 @@ function entraScopes(auth: AadMetadata): string[] {
 }
 
 /**
- * Gets an Entra ID access token for the cluster through VS Code's Microsoft
- * authentication provider. With `interactive`, prompts the user to sign in when
- * needed; otherwise only uses an existing session and throws if there is none.
+ * Gets an Entra ID access token for the cluster. Tries the Azure CLI's login
+ * first (when `serviceFabric.entra.useAzureCli` is on), then VS Code's Microsoft
+ * authentication provider. With `interactive`, the latter prompts the user to
+ * sign in when needed; otherwise it only uses an existing session and throws if
+ * there is none.
  */
-export async function getEntraAccessToken(auth: AadMetadata, interactive: boolean): Promise<string> {
+export async function getEntraAccessToken(auth: AadMetadata, interactive: boolean, logger?: Logger): Promise<string> {
+	if (vscode.workspace.getConfiguration('serviceFabric').get<boolean>('entra.useAzureCli') ?? true) {
+		try {
+			const token = await getAzureCliToken(auth.clusterApplicationId, auth.tenantId);
+			logger?.info(`Using Azure CLI token for cluster app ${auth.clusterApplicationId}.`);
+			return token.accessToken;
+		} catch (err) {
+			logger?.info(`Azure CLI token unavailable, falling back to VS Code sign-in: ${(err as Error).message}`);
+		}
+	}
 	const scopes = entraScopes(auth);
 	const session = interactive
 		? await vscode.authentication.getSession('microsoft', scopes, { createIfNone: true })
@@ -116,7 +128,7 @@ export async function configureClusterSecurity(
 		}
 		security.auth = { type: 'entra', ...metadata };
 		logger.info(`Cluster uses Microsoft Entra ID (tenant ${metadata.tenantId}, cluster app ${metadata.clusterApplicationId}).`);
-		await getEntraAccessToken(security.auth, true);
+		await getEntraAccessToken(security.auth, true, logger);
 	}
 	return security;
 }

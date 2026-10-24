@@ -539,6 +539,11 @@
                     ],
                     "description": "Which PowerShell host to use. 'auto' prefers Windows PowerShell on Windows (required by SF SDK), pwsh elsewhere."
                 },
+                "serviceFabric.entra.useAzureCli": {
+                    "type": "boolean",
+                    "default": true,
+                    "markdownDescription": "For clusters secured with Microsoft Entra ID, try the Azure CLI's login (`az login`) before signing in through VS Code. Requires the Azure CLI on `PATH`, and your tenant must allow the Azure CLI to request access to the cluster's application."
+                },
                 "serviceFabric.entra.clientId": {
                     "type": "string",
                     "default": "",

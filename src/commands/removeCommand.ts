@@ -75,7 +75,7 @@ export async function removeApplication(
 	let securityToken: string | undefined;
 	if (active.auth) {
 		try {
-			securityToken = await getEntraAccessToken(active.auth, true);
+			securityToken = await getEntraAccessToken(active.auth, true, logger);
 		} catch (err) {
 			vscode.window.showErrorMessage(`Microsoft Entra ID sign-in failed: ${(err as Error).message}`);
 			return;
