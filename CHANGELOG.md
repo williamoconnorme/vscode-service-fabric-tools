@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 1.2.0
+
+First release as **Service Fabric Tools**, a fork of [Service Fabric Project (sfproj) Tools](https://marketplace.visualstudio.com/items?itemName=sfproj-tools.service-fabric-project-tools-vscode) 1.1.11.
 
 Cross-platform publish: connect → build → package → publish → remove now works from macOS and Linux against a remote cluster. Publish and Remove now use the REST engine by default on every OS, Windows included; `Deploy-FabricApplication.ps1` is opt-in.
 

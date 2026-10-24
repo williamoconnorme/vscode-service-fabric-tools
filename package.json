@@ -1,10 +1,18 @@
 {
-    "name": "service-fabric-project-tools-vscode-fork",
-    "displayName": "Service Fabric Project (sfproj) Tools (Fork)",
-    "description": "First-class authoring, build, package, deploy, and debug support for Azure Service Fabric application projects (.sfproj) in VS Code.",
+    "name": "service-fabric-tools",
+    "displayName": "Service Fabric Tools",
+    "description": "Author, build, package, publish and debug Azure Service Fabric applications (.sfproj) on Windows, macOS and Linux, and explore your clusters.",
     "version": "1.2.0",
     "publisher": "williamoconnorme",
     "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/williamoconnorme/sfproj-tools.git"
+    },
+    "bugs": {
+        "url": "https://github.com/williamoconnorme/sfproj-tools/issues"
+    },
+    "homepage": "https://github.com/williamoconnorme/sfproj-tools#readme",
     "icon": "media/icon.png",
     "engines": {
         "vscode": "^1.90.0"
@@ -1409,7 +1417,7 @@
         "walkthroughs": [
             {
                 "id": "serviceFabric.gettingStarted",
-                "title": "Get Started with Service Fabric Tools",
+                "title": "Get Started with Service Fabric",
                 "description": "Open a Service Fabric application, build it, deploy to a local cluster, and attach the debugger.",
                 "steps": [
                     {

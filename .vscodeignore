@@ -1,10 +1,10 @@
 .vscode/**
 .github/**
 reference/**
-design_plans/**
 artifacts/**
 node_modules/**
-FORK.md
+CONTRIBUTING.md
+SECURITY.md
 .gitignore
 .gitattributes
 src/**
