@@ -2,7 +2,7 @@
     "name": "service-fabric-project-tools-vscode-fork",
     "displayName": "Service Fabric Project (sfproj) Tools (Fork)",
     "description": "First-class authoring, build, package, deploy, and debug support for Azure Service Fabric application projects (.sfproj) in VS Code.",
-    "version": "1.1.11",
+    "version": "1.2.0",
     "publisher": "williamoconnorme",
     "license": "MIT",
     "icon": "media/icon.png",
@@ -160,6 +160,11 @@
                 "title": "Disconnect",
                 "category": "Service Fabric",
                 "icon": "$(debug-disconnect)"
+            },
+            {
+                "command": "serviceFabric.cluster.changeClientCertificate",
+                "title": "Change Client Certificate…",
+                "category": "Service Fabric"
             },
             {
                 "command": "serviceFabric.cluster.selectActive",
@@ -525,6 +530,11 @@
                     "group": "inline"
                 },
                 {
+                    "command": "serviceFabric.cluster.changeClientCertificate",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.(connected|disconnected)$/",
+                    "group": "5_connection@1"
+                },
+                {
                     "command": "serviceFabric.cluster.refreshNode",
                     "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.(connected|disconnected|group\\.|appType$|app$|service\\.|partition\\.|node\\.|deployedApp$|deployedServicePackage$)/",
                     "group": "inline"
@@ -851,6 +861,22 @@
                 {
                     "command": "serviceFabric.cluster.filter.sortDefault",
                     "when": "serviceFabric.clusters.sortByHealth"
+                },
+                {
+                    "command": "serviceFabric.cluster.startLocal",
+                    "when": "isWindows"
+                },
+                {
+                    "command": "serviceFabric.cluster.stopLocal",
+                    "when": "isWindows"
+                },
+                {
+                    "command": "serviceFabric.cluster.resetLocal",
+                    "when": "isWindows"
+                },
+                {
+                    "command": "serviceFabric.cluster.switchLocalMode",
+                    "when": "isWindows"
                 }
             ],
             "serviceFabric.clusters.filter": [
@@ -1023,7 +1049,7 @@
                         "pwsh",
                         "powershell"
                     ],
-                    "description": "Which PowerShell host to use. 'auto' prefers Windows PowerShell on Windows (required by SF SDK), pwsh elsewhere."
+                    "description": "Which PowerShell host runs the Service Fabric SDK scripts (Windows only). 'auto' uses Windows PowerShell on Windows. On macOS/Linux Publish and Remove use the REST engine instead (see serviceFabric.deploy.engine)."
                 },
                 "serviceFabric.entra.useAzureCli": {
                     "type": "boolean",
@@ -1034,6 +1060,14 @@
                     "type": "string",
                     "default": "",
                     "markdownDescription": "Client (application) ID used to sign in to clusters secured with Microsoft Entra ID.\n\n- Empty (default): VS Code's built-in Microsoft sign-in. Your tenant must allow it to request access to the cluster's application.\n- `cluster`: the client application registered in the cluster's Entra ID configuration. Its app registration needs `http://localhost` as a mobile and desktop redirect URI.\n- Any other value: that application ID, e.g. your own app registration."
+                },
+                "serviceFabric.clientCertificates": {
+                    "type": "object",
+                    "default": {},
+                    "additionalProperties": {
+                        "type": "string"
+                    },
+                    "markdownDescription": "Client certificate files for clusters secured with X.509 certificates, keyed by the publish profile's `FindValue` (a thumbprint, or a subject name for `FindBySubjectName`). Values are paths to a `.pfx`/`.p12` or a PEM file with its key; `~` expands to your home folder. Example: `{ \"A1B2…\": \"~/certs/sf-admin.pfx\" }`. Used by the REST engine; on Windows the PowerShell engine reads the certificate store. Passphrases are kept in the OS keychain, never in settings."
                 },
                 "serviceFabric.confirmDestructiveActions": {
                     "type": "boolean",
@@ -1076,6 +1110,43 @@
                     "type": "boolean",
                     "default": false,
                     "description": "When true, Publish Application asks which ApplicationParameters\\<env>.xml to splat over the publish profile's defaults. When false (default), Publish reads the file paired with the publish profile via its <ApplicationParameterFile Path=\"...\" /> element — so a 5-node publish profile automatically uses the 5-node parameter file. Enable this only when you need to mix-and-match (advanced)."
+                },
+                "serviceFabric.deploy.engine": {
+                    "type": "string",
+                    "enum": [
+                        "auto",
+                        "powershell",
+                        "rest"
+                    ],
+                    "enumDescriptions": [
+                        "PowerShell on Windows, REST elsewhere.",
+                        "Deploy-FabricApplication.ps1 via the Service Fabric SDK (Windows only).",
+                        "Upload, provision and create/upgrade over the cluster's HTTP gateway. No Service Fabric SDK required."
+                    ],
+                    "default": "auto",
+                    "markdownDescription": "How Publish / Remove talk to the cluster. `auto`: PowerShell (`Deploy-FabricApplication.ps1`, same as Visual Studio) on Windows, REST elsewhere. `rest`: the extension uploads, provisions and creates/upgrades the application over the HTTP gateway — no Service Fabric SDK required. The REST engine needs a cluster whose image store is `fabric:ImageStore`."
+                },
+                "serviceFabric.deploy.overwriteBehavior": {
+                    "type": "string",
+                    "enum": [
+                        "SameAppTypeAndVersion",
+                        "Always",
+                        "Never"
+                    ],
+                    "enumDescriptions": [
+                        "Replace the application only when it is already at the same type and version.",
+                        "Replace the application whenever it exists and isn't being upgraded.",
+                        "Never replace an existing application; fail instead."
+                    ],
+                    "default": "SameAppTypeAndVersion",
+                    "markdownDescription": "REST engine only: what Publish does when the application already exists and isn't being upgraded (the `-OverwriteBehavior` of `Publish-NewServiceFabricApplication`). The PowerShell engine keeps the behavior of the project's `Deploy-FabricApplication.ps1`."
+                },
+                "serviceFabric.deploy.copyPackageTimeoutSec": {
+                    "type": "integer",
+                    "default": 600,
+                    "minimum": 30,
+                    "maximum": 86400,
+                    "markdownDescription": "REST engine only: overall time limit, in seconds, for uploading the application package to the image store. The publish profile's `<CopyPackageParameters CopyPackageTimeoutSec>` takes precedence."
                 },
                 "serviceFabric.remove.waitSeconds": {
                     "type": "number",
@@ -1212,7 +1283,8 @@
                         "description": "Run **Service Fabric: Start Local Cluster**. Choose 1-node for fast iteration or 5-node to test failover and placement.\n[Start Local Cluster](command:serviceFabric.cluster.startLocal)",
                         "media": {
                             "markdown": "media/walkthrough/start-cluster.md"
-                        }
+                        },
+                        "when": "isWindows"
                     },
                     {
                         "id": "buildAndDeploy",
@@ -1255,6 +1327,7 @@
         "build:prod": "node esbuild.config.mjs --production",
         "watch": "node esbuild.config.mjs --watch",
         "typecheck": "tsc --noEmit",
+        "test": "node scripts/run-tests.mjs",
         "format": "prettier --write \"src/**/*.ts\"",
         "package": "node -e \"require('fs').mkdirSync('artifacts',{recursive:true})\" && vsce package --no-dependencies --out artifacts/",
         "icons": "node scripts/generate-icons.js"

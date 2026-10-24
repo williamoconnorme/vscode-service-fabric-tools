@@ -5,7 +5,11 @@
 			"name": "Run Extension",
 			"type": "extensionHost",
 			"request": "launch",
-			"args": ["--extensionDevelopmentPath=${workspaceFolder}"],
+			"args": [
+				"--extensionDevelopmentPath=${workspaceFolder}",
+				// The upstream extension contributes the same view and command IDs; with both loaded, one fails to activate.
+				"--disable-extension=sfproj-tools.service-fabric-project-tools-vscode"
+			],
 			"outFiles": ["${workspaceFolder}/dist/**/*.js"],
 			"preLaunchTask": "build"
 		}

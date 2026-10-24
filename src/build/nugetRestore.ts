@@ -37,31 +37,31 @@ export interface RestoreOptions {
 	progress?: vscodeTypes.Progress<{ message?: string; increment?: number }>;
 }
 
-// `vscode` is loaded lazily so this module can also run under the bare Node
-// test runner (where the `vscode` module isn't on the require graph). Pure
-// helpers (`parsePackagesConfig`, `packageDirectoryComplete`,
-// `sanitizeEntryName`) never touch the runtime value, so they're safe to
-// import from tests.
-function tryGetVscodeWorkspaceFolders(): readonly vscodeTypes.WorkspaceFolder[] | undefined {
-	try {
-		// eslint-disable-next-line @typescript-eslint/no-require-imports
-		return (require('vscode') as typeof vscodeTypes | undefined)?.workspace?.workspaceFolders;
-	} catch {
-		return undefined;
-	}
+/** The package that provides the `.sfproj` build targets; the one restore must not skip. */
+const SF_MSBUILD_PACKAGE_ID = 'Microsoft.VisualStudio.Azure.Fabric.MSBuild';
+
+function isSfMsbuildPackage(pkg: PackageRef): boolean {
+	return pkg.id.toLowerCase() === SF_MSBUILD_PACKAGE_ID.toLowerCase();
 }
 
 /**
  * Ensure every package referenced by `<sfprojDir>/packages.config` is present
- * under `<workspace>/packages/<id>.<version>/`. Idempotent: returns immediately
- * with `strategy:'skipped'` when every required directory already exists.
+ * under the `packages/` folder the `.sfproj` imports from (see
+ * {@link computePackagesDirectory}). Idempotent: returns immediately with
+ * `strategy:'skipped'` when every required directory already exists.
  *
  * Resolution chain:
  *   B. `nuget.exe restore` (when `locateNuget()` finds an executable).
  *   C. `msbuild /t:Restore /p:RestorePackagesConfig=true /p:RestorePackagesPath=…`.
  *   F. Direct `https://api.nuget.org/v3-flatcontainer/<id>/<ver>/<id>.<ver>.nupkg`
- *      fetch + in-process unzip — used only when both B and C fail and the
- *      missing set is small (offline-friendly fallback).
+ *      fetch + in-process unzip — used only when the missing set is small.
+ *      On Windows it runs after B and C fail. Elsewhere it replaces C: .NET
+ *      (Core) MSBuild's Restore silently skips `packages.config` projects, so
+ *      C exits 0 there without restoring anything.
+ *
+ * Off Windows, packages that only exist on a private feed can't be fetched
+ * (F only knows api.nuget.org). As long as the Service Fabric MSBuild package
+ * itself is present, restore succeeds and names the skipped packages.
  *
  * Returns `{ ok: false, strategy: 'failed', message }` with an actionable error
  * when every strategy fails. Never throws (callers can safely await without try/catch).
@@ -71,7 +71,7 @@ export async function ensureNugetRestored(sfprojPath: string, options?: RestoreO
 	const progress = options?.progress;
 	const sfprojDir = path.dirname(sfprojPath);
 	const packagesConfigPath = path.join(sfprojDir, 'packages.config');
-	const packagesDirectory = computePackagesDirectory(sfprojDir);
+	const packagesDirectory = computePackagesDirectory(sfprojPath);
 	let required: PackageRef[];
 	try {
 		const xml = fs.readFileSync(packagesConfigPath, 'utf8');
@@ -88,6 +88,18 @@ export async function ensureNugetRestored(sfprojPath: string, options?: RestoreO
 		};
 	}
 	const missing = required.filter((p) => !packageDirectoryComplete(packagesDirectory, p));
+	const offWindows = process.platform !== 'win32';
+	if (offWindows && missing.length > 0 && !missing.some(isSfMsbuildPackage) && required.some(isSfMsbuildPackage)) {
+		// Already warned on the restore that left these behind; don't re-fetch on every build.
+		output?.appendLine(`[nuget-restore] Service Fabric targets present; not restoring ${describe(missing)} (not available off Windows).`);
+		return {
+			ok: true,
+			strategy: 'skipped',
+			message: 'Service Fabric MSBuild targets are restored.',
+			packagesDirectory,
+			missingOnEntry: [],
+		};
+	}
 	if (missing.length === 0) {
 		return {
 			ok: true,
@@ -98,7 +110,7 @@ export async function ensureNugetRestored(sfprojPath: string, options?: RestoreO
 		};
 	}
 	progress?.report({ message: `Restoring ${missing.length} NuGet package(s)…` });
-	output?.appendLine(`[nuget-restore] Missing: ${missing.map((p) => `${p.id}.${p.version}`).join(', ')}`);
+	output?.appendLine(`[nuget-restore] Missing: ${describe(missing)} (restoring into ${packagesDirectory})`);
 
 	// Strategy B — nuget.exe.
 	const nuget = await locateNuget();
@@ -112,6 +124,42 @@ export async function ensureNugetRestored(sfprojPath: string, options?: RestoreO
 		output?.appendLine('[nuget-restore] Strategy B: nuget.exe not found; skipping.');
 	}
 
+	// Strategy F — HTTP fallback (only when remaining set is small enough to be sane).
+	const tryHttpFallback = async (): Promise<boolean> => {
+		const remaining = stillMissing(packagesDirectory, required);
+		if (remaining.length === 0 || remaining.length > 4) return false;
+		output?.appendLine(`[nuget-restore] Strategy F: HTTP fetch from api.nuget.org for ${remaining.length} package(s)`);
+		// One package that isn't on nuget.org (a private-feed package) mustn't stop the others.
+		for (const pkg of remaining) {
+			progress?.report({ message: `Fetching ${pkg.id} ${pkg.version}…` });
+			try {
+				await fetchAndExtract(pkg, packagesDirectory, output);
+			} catch (err) {
+				output?.appendLine(
+					`[nuget-restore] Strategy F: ${pkg.id} ${pkg.version} failed: ${err instanceof Error ? err.message : String(err)}`,
+				);
+			}
+		}
+		return stillMissing(packagesDirectory, required).length === 0;
+	};
+	if (offWindows) {
+		if (await tryHttpFallback()) return success('http-fallback', packagesDirectory, missing);
+		const left = stillMissing(packagesDirectory, required);
+		if (!left.some(isSfMsbuildPackage)) {
+			output?.appendLine(
+				`[nuget-restore] Warning: couldn't restore ${describe(left)} from api.nuget.org. packages.config packages from private feeds can't be restored off Windows; the Service Fabric targets are in place, so the build continues. If the .sfproj imports one of these packages, copy it into ${packagesDirectory}.`,
+			);
+			return success('http-fallback', packagesDirectory, missing);
+		}
+		return {
+			ok: false,
+			strategy: 'failed',
+			message: `Could not download ${SF_MSBUILD_PACKAGE_ID} from api.nuget.org into ${packagesDirectory}. Check network access to api.nuget.org (see the Service Fabric output channel for the error).`,
+			packagesDirectory,
+			missingOnEntry: missing,
+		};
+	}
+
 	// Strategy C — msbuild /t:Restore /p:RestorePackagesConfig=true.
 	output?.appendLine('[nuget-restore] Strategy C: msbuild /t:Restore /p:RestorePackagesConfig=true');
 	const msbuildOk = await runMsbuildRestore(sfprojPath, packagesDirectory, output);
@@ -119,23 +167,7 @@ export async function ensureNugetRestored(sfprojPath: string, options?: RestoreO
 		return success('msbuild-restorepkgconfig', packagesDirectory, missing);
 	}
 
-	// Strategy F — HTTP fallback (only when remaining set is small enough to be sane).
-	const remaining = stillMissing(packagesDirectory, required);
-	if (remaining.length > 0 && remaining.length <= 4) {
-		output?.appendLine(`[nuget-restore] Strategy F: HTTP fetch from api.nuget.org for ${remaining.length} package(s)`);
-		try {
-			for (const pkg of remaining) {
-				progress?.report({ message: `Fetching ${pkg.id} ${pkg.version}…` });
-				await fetchAndExtract(pkg, packagesDirectory, output);
-			}
-			if (stillMissing(packagesDirectory, required).length === 0) {
-				return success('http-fallback', packagesDirectory, missing);
-			}
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			output?.appendLine(`[nuget-restore] Strategy F failed: ${msg}`);
-		}
-	}
+	if (process.platform === 'win32' && (await tryHttpFallback())) return success('http-fallback', packagesDirectory, missing);
 	return {
 		ok: false,
 		strategy: 'failed',
@@ -147,18 +179,33 @@ export async function ensureNugetRestored(sfprojPath: string, options?: RestoreO
 }
 
 /**
- * Resolve the workspace-level `packages/` directory, matching the convention
- * Visual Studio's `packages.config` consumers use: a `packages/` folder one
- * level up from the project (so `..\packages\…` paths inside the .sfproj
- * resolve to it). Falls back to `<sfprojDir>/../packages` when no workspace
- * folder is open.
+ * The `packages/` folder the `.sfproj` imports its Service Fabric targets
+ * from: the folder in `<Import Project="…\packages\Microsoft.VisualStudio.Azure.Fabric.MSBuild.<ver>\build\…">`,
+ * resolved against the project. Defaults to `<sfprojDir>/../packages`, the
+ * Visual Studio convention (the solution folder's `packages/`).
  */
-function computePackagesDirectory(sfprojDir: string): string {
-	const wsFolders = tryGetVscodeWorkspaceFolders();
-	// First workspace folder is conventionally the repo root in our tooling.
-	return wsFolders && wsFolders.length > 0
-		? path.join(wsFolders[0].uri.fsPath, 'packages')
-		: path.join(path.dirname(sfprojDir), 'packages');
+export function computePackagesDirectory(sfprojPath: string, sfprojXml?: string): string {
+	const sfprojDir = path.dirname(sfprojPath);
+	let xml = sfprojXml;
+	if (xml === undefined) {
+		try {
+			xml = fs.readFileSync(sfprojPath, 'utf8');
+		} catch {
+			xml = '';
+		}
+	}
+	const m = /<Import\b[^>]*\bProject\s*=\s*"([^"]*?)[\\/]?Microsoft\.VisualStudio\.Azure\.Fabric\.MSBuild\.[^\\/"]+[\\/]build[\\/]/i.exec(
+		xml,
+	);
+	if (m && !m[1].includes('$(')) {
+		const relative = m[1].replace(/[\\/]+/g, path.sep);
+		return path.resolve(sfprojDir, relative || '.');
+	}
+	return path.join(path.dirname(sfprojDir), 'packages');
+}
+
+function describe(packages: PackageRef[]): string {
+	return packages.map((p) => `${p.id}.${p.version}`).join(', ');
 }
 
 /**

@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
+import * as os from 'os';
 import type { ClusterConnection, ConnectionStore } from '../cluster/connectionStore';
 import type { DeployedApplicationInfo, DeployedCodePackageInfo } from '../cluster/sfRestClient';
 import { createClientForConnection } from '../cluster/clusterAuth';
-import { buildAttachConfig } from './attachConfig';
+import { buildAttachConfig, isAttachableCluster } from './attachConfig';
 import {
 	CANCEL_BUTTON_LABEL,
 	INSTALL_BUTTON_LABEL,
@@ -47,6 +48,14 @@ export async function attachToDeployedService(
 	const connection = args?.connection ?? store.getActive();
 	if (!connection || !connection.connected) {
 		vscode.window.showWarningMessage('Connect to a Service Fabric cluster before attaching a debugger.');
+		return;
+	}
+	if (!isAttachableCluster(connection, os.hostname())) {
+		vscode.window.showWarningMessage(
+			process.platform === 'win32'
+				? `Attach requires the service to run on this machine. ${connection.label} is a remote cluster, so its processes run on other nodes.`
+				: "Attach requires the service to run on this machine. On macOS and Linux, services run on remote nodes or inside the Docker onebox container, which the debugger can't reach by process ID.",
+		);
 		return;
 	}
 	const client = createClientForConnection(connection, { interactive: true });

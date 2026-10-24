@@ -23,7 +23,7 @@
  * No `vscode` or `fs` imports — everything here is unit-testable.
  */
 import { isAspNetKind, isStatefulKind } from './addServiceTemplates';
-import type { ServiceKind, ServiceRuntime } from './addServiceTemplates';
+import type { ServiceKind, ServiceRuntime, TargetClusterOs } from './addServiceTemplates';
 import { DEPLOY_FABRIC_APPLICATION_PS1 } from './deployFabricApplicationScript';
 
 /** The three environments Visual Studio seeds for a new application. */
@@ -49,6 +49,8 @@ export interface CreateApplicationTemplate {
 	/** Defaults to `1.0.0`. */
 	applicationVersion?: string;
 	targetFramework?: string;
+	/** Defaults to `windows`; see `AddServiceTemplate.targetOs`. */
+	targetOs?: TargetClusterOs;
 }
 
 /** {@link CreateApplicationTemplate} with every default filled in. */
@@ -317,7 +319,7 @@ ${serviceTypesBlock}
   <CodePackage Name="Code" Version="${r.serviceVersion}">
     <EntryPoint>
       <ExeHost>
-        <Program>${r.serviceName}.exe</Program>${workingFolder}
+        <Program>${r.serviceName}${r.targetOs === 'linux' ? '' : '.exe'}</Program>${workingFolder}
       </ExeHost>
     </EntryPoint>${aspNetEnvBlock}
   </CodePackage>

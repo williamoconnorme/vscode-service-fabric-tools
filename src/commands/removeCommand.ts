@@ -3,6 +3,9 @@ import { resolveTargetProject, type ProjectCommandTarget, type ProjectLookup } f
 import { runPowerShell } from '../cluster/powerShellRunner';
 import { createClientForConnection, getEntraAccessToken } from '../cluster/clusterAuth';
 import { SfAuthError } from '../cluster/sfRestClient';
+import { resolveDeployEngine } from '../deploy/deployEngine';
+import { reportClusterAuthFailure } from './clusterCommands';
+import { DeployCancelledError, removeViaRest } from '../deploy/restDeploy';
 import type { ClusterConnection, ConnectionStore } from '../cluster/connectionStore';
 import type { LocalClusterManager } from '../cluster/localCluster';
 import type { Logger } from '../util/logger';
@@ -29,7 +32,8 @@ function toClientConnectionEndpoint(endpoint: string): string {
 
 /**
  * `serviceFabric.remove`: tear down every instance of the project's
- * application type on the active cluster and unregister the type.
+ * application type on the active cluster and unregister the type, through
+ * the SDK's PowerShell module or the HTTP gateway (`serviceFabric.deploy.engine`).
  */
 export async function removeApplication(
 	watcher: ProjectLookup,
@@ -38,8 +42,12 @@ export async function removeApplication(
 	logger: Logger,
 	target?: ProjectCommandTarget,
 ): Promise<void> {
-	if (process.platform !== 'win32') {
-		vscode.window.showWarningMessage('Remove is supported on Windows only \u2014 the Service Fabric SDK is required.');
+	const engineChoice = resolveDeployEngine(
+		vscode.workspace.getConfiguration('serviceFabric').get<string>('deploy.engine'),
+		process.platform,
+	);
+	if ('error' in engineChoice) {
+		vscode.window.showErrorMessage(engineChoice.error);
 		return;
 	}
 	const project = await resolveTargetProject(watcher, target);
@@ -62,6 +70,43 @@ export async function removeApplication(
 			'Remove',
 		)) !== 'Remove'
 	) {
+		return;
+	}
+	const waitSeconds = vscode.workspace.getConfiguration('serviceFabric').get<number>('remove.waitSeconds') ?? 30;
+	if (engineChoice.engine === 'rest') {
+		if (!(await ensureClusterReachableForRemove(active, logger))) return;
+		logger.show();
+		logger.info(`Removing application type '${manifest.applicationTypeName}' from ${active.endpoint} over the HTTP gateway...`);
+		try {
+			const removed = await vscode.window.withProgress(
+				{
+					location: vscode.ProgressLocation.Notification,
+					title: `Service Fabric: removing ${manifest.applicationTypeName}`,
+					cancellable: true,
+				},
+				(_progress, token) =>
+					removeViaRest(createClientForConnection(active, { interactive: true }), manifest.applicationTypeName, logger, {
+						waitSeconds: Math.max(0, Math.floor(waitSeconds)),
+						token,
+					}),
+			);
+			if (removed) {
+				vscode.window.showInformationMessage(
+					`Removed application type '${manifest.applicationTypeName}' and its instances from ${active.label}.`,
+				);
+			} else {
+				vscode.window.showWarningMessage(
+					`Applications of type '${manifest.applicationTypeName}' are still being deleted, so the type wasn't unregistered. Run Remove again shortly.`,
+				);
+			}
+		} catch (err) {
+			if (err instanceof DeployCancelledError) vscode.window.showWarningMessage('Remove cancelled.');
+			else {
+				logger.error(`Remove failed: ${(err as Error).message}`);
+				vscode.window.showErrorMessage(`Remove failed: ${(err as Error).message}`);
+			}
+		}
+		await localCluster.refresh(active, { interactive: true });
 		return;
 	}
 	let clientEndpoint: string;
@@ -170,7 +215,6 @@ if ($stillThere.Count -gt 0) {
 `;
 	logger.show();
 	logger.info(`Connecting to ${clientEndpoint} (client TCP) for remove...`);
-	const waitSeconds = vscode.workspace.getConfiguration('serviceFabric').get<number>('remove.waitSeconds') ?? 30;
 	const result = await runPowerShell(
 		logger,
 		script,
@@ -209,7 +253,8 @@ async function ensureClusterReachableForRemove(connection: ClusterConnection, lo
 	} catch (err) {
 		logger.warn(`Cluster probe failed: ${(err as Error).message}`);
 		if (err instanceof SfAuthError) {
-			vscode.window.showErrorMessage(`${err.message} Reconnect to the cluster to sign in again.`);
+			if (connection.auth) vscode.window.showErrorMessage(`${err.message} Reconnect to the cluster to sign in again.`);
+			else await reportClusterAuthFailure(err, connection);
 			return false;
 		}
 	}

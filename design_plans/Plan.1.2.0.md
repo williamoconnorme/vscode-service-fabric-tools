@@ -134,7 +134,12 @@ find MyApp/pkg/Debug -maxdepth 3
 
 ### 3.3 Result
 
-> _Record outcome, `dotnet --version`, and the first error here._
+**Outcome A — `/t:Package` succeeds; Phase 3 is not needed.** Run on 2026-10-24 on macOS arm64 with `dotnet` 10.0.400 (MSBuild 18.9.6), with SDKs 8.0.419 and 10.0.400 installed and no Mono or SF SDK. The app was a stateless .NET (`net10.0`) service scaffolded with `applyCreateApplication`.
+
+- `dotnet msbuild <App>.sfproj -t:Package -p:Configuration=Debug -p:Platform=x64` built with 0 warnings and 0 errors. The SF build tasks (`Microsoft.VisualStudio.Azure.Fabric.BuildTasks.dll`) load under .NET MSBuild, and no property overrides were needed.
+- The package lands in `pkg/Debug/<App>/` (the sfproj sets `PackageLocation=pkg\$(Configuration)\$(MSBuildProjectName)`). It holds `ApplicationManifest.xml` and `<Svc>Pkg/{ServiceManifest.xml,Config,Code}`. `Code` has a self-contained **win-x64** publish (`MyService.exe`), so a Mac cross-builds Windows packages. Linux clusters need `linux-x64` and a `Program` without `.exe` (now a scaffolding choice).
+- **Restore, as written in §3.1, does not work.** `-t:Restore -p:RestorePackagesConfig=true` exits 0, but .NET's RestoreTask skips the `packages.config` sfproj ("All projects are up-to-date"). `RestorePackagesPath` also resolves against the cwd and becomes the csproj's global packages folder. What works is fetching the nupkg from api.nuget.org (strategy F, now first on non-Windows) plus restoring the service csproj, which the Package task now does with `-restore`.
+- The package resolver joined nested paths with `\`, so the extension couldn't find `pkg/Debug/<App>` on POSIX. This is fixed.
 
 ## 4. Phase 2 — REST deploy engine
 

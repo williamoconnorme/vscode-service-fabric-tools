@@ -20,6 +20,14 @@ export type ServiceRuntime = 'netcore' | 'netfx';
 /** Cluster size classification of a per-environment parameters file. */
 export type EnvironmentFlavor = 'oneNode' | 'fiveNode' | 'cloud';
 
+/** OS of the cluster nodes the service runs on: picks the runtime identifier and the `.exe` suffix. */
+export type TargetClusterOs = 'windows' | 'linux';
+
+/** `<RuntimeIdentifier>` for a self-contained .NET service on `os`. */
+export function runtimeIdentifierFor(os: TargetClusterOs | undefined): string {
+	return os === 'linux' ? 'linux-x64' : 'win-x64';
+}
+
 /** Opt-in HTTPS endpoint for ASP.NET kinds. Missing fields get defaults. */
 export interface HttpsEndpointOptions {
 	name?: string;
@@ -58,6 +66,8 @@ export interface AddServiceTemplate {
 	serviceFabricSdkVersion?: string;
 	/** Folder (and project) name of the generated csproj; defaults to `serviceName`. */
 	csprojDirName?: string;
+	/** Defaults to `windows`. `linux` publishes for `linux-x64` and drops `.exe` from `<Program>` (C# kinds only). */
+	targetOs?: TargetClusterOs;
 }
 
 /** A `<Parameter Name=".." DefaultValue=".." />` declaration. */
@@ -163,7 +173,7 @@ function defaultParametersFor(template: AddServiceTemplate): ParameterDeclaratio
  */
 export function buildServiceManifestXml(t: AddServiceTemplate): string {
 	const endpoint = t.endpointName ?? 'ServiceEndpoint';
-	const exe = t.exeProgram ?? `${t.serviceName}.exe`;
+	const exe = t.exeProgram ?? (t.targetOs === 'linux' && isCsharpKind(t.kind) ? t.serviceName : `${t.serviceName}.exe`);
 	let typeElem: string;
 	switch (t.kind) {
 		case 'stateful':
@@ -763,7 +773,7 @@ export function resolveCsharpSettings(t: AddServiceTemplate): CsharpSettings {
 	// resolves to net472 — the netfx Service Fabric SDK doesn't support
 	// net8+, and the SF Application targets only ship net472 assets there.
 	const defaultTfm = runtime === 'netfx' ? 'net472' : 'net10.0';
-	const runtimeIdentifier = runtime === 'netcore' ? 'win-x64' : undefined;
+	const runtimeIdentifier = runtime === 'netcore' ? runtimeIdentifierFor(t.targetOs) : undefined;
 	return {
 		className,
 		rootNamespace,

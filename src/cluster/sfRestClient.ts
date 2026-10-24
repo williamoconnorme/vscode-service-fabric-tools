@@ -222,8 +222,13 @@ export interface AadMetadata {
 
 /** Transport and auth hooks for {@link SfRestClient}. */
 export interface SfRestClientOptions {
-	/** Agent for https requests, e.g. one that pins the server certificate. */
-	agent?: https.Agent;
+	/**
+	 * Agent for https requests, e.g. one that pins the server certificate or
+	 * presents a client certificate. A function is called once, on the first
+	 * https request, so material that needs async loading (a passphrase from
+	 * SecretStorage) doesn't force every caller to await client creation.
+	 */
+	agent?: https.Agent | (() => Promise<https.Agent | undefined>);
 	/** Returns a bearer token for Entra-secured clusters, or `undefined` for none. */
 	getAccessToken?: () => Promise<string | undefined>;
 }
@@ -472,13 +477,82 @@ export class SfRestClient {
 		return this.get(`/Applications/${applicationId}/$/GetHealth`, timeoutMs);
 	}
 
-	getApplicationUpgradeProgress(applicationId: string, timeoutMs = 10000): Promise<unknown> {
+	getApplicationUpgradeProgress(applicationId: string, timeoutMs = 10000): Promise<any> {
 		return this.get(`/Applications/${applicationId}/$/GetUpgradeProgress`, timeoutMs);
 	}
 
 	/** `/Applications/{id}/$/Delete`: deletes an application and all its services. */
 	async deleteApplication(applicationId: string, forceRemove = false, timeoutMs = 60000): Promise<void> {
 		await this.post(`/Applications/${applicationId}/$/Delete${forceRemove ? '?ForceRemove=true' : ''}`, timeoutMs);
+	}
+
+	/** `/Applications/$/Create`: creates an application from a provisioned type version. */
+	async createApplication(description: ApplicationCreateDescription, timeoutMs = 60000): Promise<void> {
+		await this.post('/Applications/$/Create', timeoutMs, { body: description });
+	}
+
+	/** `/Applications/{id}/$/Upgrade`: starts a rolling upgrade to another provisioned type version. */
+	async upgradeApplication(applicationId: string, description: ApplicationUpgradeDescription, timeoutMs = 60000): Promise<void> {
+		await this.post(`/Applications/${applicationId}/$/Upgrade`, timeoutMs, { body: description });
+	}
+
+	/** `/Applications/{id}/$/GetServices/$/Create`: creates a service in an application. */
+	async createService(applicationId: string, description: Record<string, unknown>, timeoutMs = 60000): Promise<void> {
+		await this.post(`/Applications/${applicationId}/$/GetServices/$/Create`, timeoutMs, { body: description });
+	}
+
+	// ---- Image store -------------------------------------------------------------
+
+	/** `PUT /ImageStore/{path}`: uploads one file in a single request. `contentPath` uses `/` separators. */
+	async uploadFile(contentPath: string, body: Buffer, timeoutMs = 60000): Promise<void> {
+		await this.request('PUT', `/ImageStore/${encodeContentPath(contentPath)}`, timeoutMs, { rawBody: body });
+	}
+
+	/**
+	 * `PUT /ImageStore/{path}/$/UploadChunk`: uploads bytes `start`..`end`
+	 * (inclusive) of a `total`-byte file into an upload session.
+	 */
+	async uploadChunk(
+		contentPath: string,
+		sessionId: string,
+		start: number,
+		end: number,
+		total: number,
+		body: Buffer,
+		timeoutMs = 60000,
+	): Promise<void> {
+		await this.request(
+			'PUT',
+			`/ImageStore/${encodeContentPath(contentPath)}/$/UploadChunk?session-id=${encodeURIComponent(sessionId)}`,
+			timeoutMs,
+			{ rawBody: body, headers: { 'Content-Range': `bytes ${start}-${end}/${total}` } },
+		);
+	}
+
+	/** `POST /ImageStore/$/CommitUploadSession`: assembles an upload session's chunks into the file. */
+	async commitUploadSession(sessionId: string, timeoutMs = 60000): Promise<void> {
+		await this.post(`/ImageStore/$/CommitUploadSession?session-id=${encodeURIComponent(sessionId)}`, timeoutMs);
+	}
+
+	/** `DELETE /ImageStore/$/DeleteUploadSession`: discards an unfinished upload session. */
+	async deleteUploadSession(sessionId: string, timeoutMs = 30000): Promise<void> {
+		await this.request('DELETE', `/ImageStore/$/DeleteUploadSession?session-id=${encodeURIComponent(sessionId)}`, timeoutMs);
+	}
+
+	/** `DELETE /ImageStore/{path}`: removes a file or folder from the image store. */
+	async deleteImageStoreContent(contentPath: string, timeoutMs = 60000): Promise<void> {
+		await this.request('DELETE', `/ImageStore/${encodeContentPath(contentPath)}`, timeoutMs);
+	}
+
+	/**
+	 * `/ApplicationTypes/$/Provision` for a package already in the image store.
+	 * The `Kind` discriminator needs api-version 6.2.
+	 */
+	async provisionApplicationType(buildPath: string, async = false, timeoutMs = 300000): Promise<void> {
+		await this.post('/ApplicationTypes/$/Provision', timeoutMs, {
+			apiVersion: '6.2',
+			body: { Kind: 'ImageStorePath', ApplicationTypeBuildPath: buildPath, Async: async },
+		});
 	}
 
 	// ---- Services ----------------------------------------------------------------
@@ -873,17 +947,23 @@ export class SfRestClient {
 		return this.request('POST', pathAndQuery, timeoutMs, opts);
 	}
 
-	private async request(method: 'GET' | 'POST', pathAndQuery: string, timeoutMs: number, opts: RequestOptions = {}): Promise<any> {
+	private async request(method: HttpMethod, pathAndQuery: string, timeoutMs: number, opts: RequestOptions = {}): Promise<any> {
 		const sep = pathAndQuery.includes('?') ? '&' : '?';
 		const requestUrl = new url.URL(`${this.endpoint}${pathAndQuery}${sep}api-version=${opts.apiVersion ?? this.apiVersion}`);
 		const isHttps = requestUrl.protocol === 'https:';
 		const lib = isHttps ? https : http;
-		const headers: Record<string, string> = { Accept: 'application/json' };
-		const payload = opts.body === undefined ? undefined : Buffer.from(JSON.stringify(opts.body), 'utf8');
-		if (payload) {
+		const headers: Record<string, string> = { Accept: 'application/json', ...opts.headers };
+		let payload: Buffer | undefined;
+		if (opts.rawBody) {
+			payload = opts.rawBody;
+			headers['Content-Type'] = 'application/octet-stream';
+		} else if (opts.body !== undefined) {
+			payload = Buffer.from(JSON.stringify(opts.body), 'utf8');
 			headers['Content-Type'] = 'application/json';
-			headers['Content-Length'] = String(payload.length);
 		}
+		// Bodiless POST/PUT/DELETE still send a length so the gateway doesn't wait for one.
+		if (payload || method !== 'GET') headers['Content-Length'] = String(payload?.length ?? 0);
+		const agent = isHttps ? await this.resolveAgent() : undefined;
 		const token = opts.anonymous ? undefined : await this.options.getAccessToken?.();
 		if (token) {
 			// Never send a bearer token in clear text.
@@ -899,7 +979,7 @@ export class SfRestClient {
 					path: `${requestUrl.pathname}${requestUrl.search}`,
 					headers,
 					timeout: timeoutMs,
-					...(isHttps && this.options.agent ? { agent: this.options.agent } : {}),
+					...(agent ? { agent } : {}),
 				},
 				(res) => {
 					const chunks: Buffer[] = [];
@@ -928,6 +1008,54 @@ export class SfRestClient {
 			req.end();
 		});
 	}
+
+	private agentPromise: Promise<https.Agent | undefined> | undefined;
+
+	private resolveAgent(): Promise<https.Agent | undefined> {
+		const agent = this.options.agent;
+		if (typeof agent !== 'function') return Promise.resolve(agent);
+		// Retry after a failure (e.g. a cancelled passphrase prompt) instead of caching the rejection.
+		this.agentPromise ??= agent().catch((err) => {
+			this.agentPromise = undefined;
+			throw err;
+		});
+		return this.agentPromise;
+	}
+}
+
+type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
+
+/** Body of `/Applications/$/Create`. */
+export interface ApplicationCreateDescription {
+	/** Full `fabric:/` name. */
+	Name: string;
+	TypeName: string;
+	TypeVersion: string;
+	ParameterList?: { Key: string; Value: string }[];
+}
+
+/** Body of `/Applications/{id}/$/Upgrade` (the subset this extension sends). */
+export interface ApplicationUpgradeDescription {
+	Name: string;
+	TargetApplicationTypeVersion: string;
+	Parameters: { Key: string; Value: string }[];
+	UpgradeKind: 'Rolling';
+	RollingUpgradeMode: 'Monitored' | 'UnmonitoredAuto' | 'UnmonitoredManual';
+	UpgradeReplicaSetCheckTimeoutInSeconds?: number;
+	ForceRestart?: boolean;
+	InstanceCloseDelayDurationInSeconds?: number;
+	/** Durations are milliseconds as strings (the gateway also accepts ISO 8601). */
+	MonitoringPolicy?: Record<string, string>;
+	ApplicationHealthPolicy?: Record<string, unknown>;
+}
+
+/** Encodes an image-store relative path segment by segment, keeping `/` separators. */
+export function encodeContentPath(contentPath: string): string {
+	return contentPath
+		.split(/[\\/]+/)
+		.filter(Boolean)
+		.map(encodeURIComponent)
+		.join('/');
 }
 
 /** Per-request overrides for {@link SfRestClient}. */
@@ -936,8 +1064,12 @@ interface RequestOptions {
 	apiVersion?: string;
 	/** Skips the bearer token (for endpoints that are anonymous by design). */
 	anonymous?: boolean;
-	/** JSON request body (POST only). */
+	/** JSON request body. */
 	body?: unknown;
+	/** Binary request body, sent as `application/octet-stream`. Takes precedence over `body`. */
+	rawBody?: Buffer;
+	/** Extra request headers. */
+	headers?: Record<string, string>;
 }
 
 /**

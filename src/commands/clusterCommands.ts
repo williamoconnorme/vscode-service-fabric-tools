@@ -1,7 +1,9 @@
 import * as vscode from 'vscode';
 import type { ClusterConnection, ConnectionStore } from '../cluster/connectionStore';
 import type { LocalClusterManager } from '../cluster/localCluster';
-import { configureClusterSecurity, type ClusterSecurity } from '../cluster/clusterAuth';
+import { chooseClientCertificate, configureClusterSecurity, securityOf, type ClusterSecurity } from '../cluster/clusterAuth';
+import { getClientCertManager } from '../cluster/clientCertStore';
+import { SfAuthError } from '../cluster/sfRestClient';
 import { runPowerShell } from '../cluster/powerShellRunner';
 import type { Logger } from '../util/logger';
 import type { ClusterTreeItem } from '../views/clustersTreeProvider';
@@ -94,9 +96,65 @@ export async function connectRemoteCluster(store: ConnectionStore, local: LocalC
 	await store.setActive(conn.id);
 	// LocalClusterManager.refresh probes any endpoint, not only the local one.
 	const refreshed = await local.refresh(conn, { interactive: true });
-	const via = conn.auth ? ' using Microsoft Entra ID' : '';
+	const via = conn.auth ? ' using Microsoft Entra ID' : conn.clientCert ? ` with client certificate ${conn.clientCert.thumbprint}` : '';
 	if (refreshed.connected) vscode.window.showInformationMessage(`Connected to ${label}${via}.`);
 	else vscode.window.showWarningMessage(`Saved ${label}, but couldn't reach it${via}. See the Service Fabric output channel.`);
+}
+
+/**
+ * `serviceFabric.cluster.changeClientCertificate`: picks a new X.509 client
+ * certificate for the given (or active) cluster, checks the gateway accepts it
+ * and saves it on the connection.
+ */
+export async function changeClientCertificate(
+	store: ConnectionStore,
+	local: LocalClusterManager,
+	logger: Logger,
+	connection?: ClusterConnection,
+): Promise<void> {
+	const target = connection ?? store.getActive();
+	if (!target) {
+		vscode.window.showInformationMessage('No active cluster. Use "Connect to Remote Cluster…" first.');
+		return;
+	}
+	if (new URL(target.endpoint).protocol !== 'https:') {
+		vscode.window.showWarningMessage(`${target.label} uses http://; client certificates need an https:// endpoint.`);
+		return;
+	}
+	let clientCert;
+	try {
+		clientCert = await chooseClientCertificate(target.endpoint, { ...securityOf(target), clientCert: undefined }, logger, {
+			pickImmediately: true,
+		});
+	} catch (err) {
+		vscode.window.showErrorMessage(`Couldn't check the client certificate against ${target.label}: ${(err as Error).message}`);
+		return;
+	}
+	if (!clientCert) return;
+	if (target.clientCert) getClientCertManager().forget(target.clientCert.thumbprint);
+	const updated: ClusterConnection = { ...target, clientCert };
+	await store.upsert(updated);
+	const refreshed = await local.refresh(updated, { interactive: true });
+	if (refreshed.connected) vscode.window.showInformationMessage(`${target.label} now uses client certificate ${clientCert.thumbprint}.`);
+}
+
+/**
+ * Shows a gateway error. A 401/403 from a certificate-secured (non-Entra)
+ * https cluster offers "Change Client Certificate…". Returns `true` when `err`
+ * was an auth failure.
+ */
+export async function reportClusterAuthFailure(err: unknown, connection: ClusterConnection): Promise<boolean> {
+	if (!(err instanceof SfAuthError)) return false;
+	if (connection.auth || !connection.endpoint.startsWith('https:')) {
+		vscode.window.showErrorMessage(err.message);
+		return true;
+	}
+	const hint = connection.clientCert
+		? `The cluster rejected client certificate ${connection.clientCert.thumbprint}.`
+		: 'The cluster may require a client certificate.';
+	const choice = await vscode.window.showErrorMessage(`${err.message} ${hint}`, 'Change Client Certificate…');
+	if (choice) await vscode.commands.executeCommand('serviceFabric.cluster.changeClientCertificate', { connection });
+	return true;
 }
 
 /** `serviceFabric.cluster.disconnect`: removes the given (or active) connection. */
@@ -124,10 +182,25 @@ export async function selectActiveCluster(store: ConnectionStore): Promise<void>
 	if (picked) await store.setActive(picked.id);
 }
 
+/**
+ * Explains that the local dev cluster needs Windows, and points at the help
+ * guide's Docker onebox section. Runtime fallback for the `isWindows`-gated commands.
+ */
+function showLocalClusterUnsupported(): void {
+	vscode.window
+		.showWarningMessage(
+			'The local Service Fabric dev cluster needs the Windows Service Fabric SDK. On macOS and Linux, publish to a remote cluster, or run the Linux "onebox" cluster in Docker (x64 only; see the help guide).',
+			'Open Help Guide',
+		)
+		.then((choice) => {
+			if (choice) vscode.commands.executeCommand('serviceFabric.openHelp');
+		});
+}
+
 /** `serviceFabric.cluster.startLocal`: runs the SDK's DevClusterSetup.ps1 (Windows only). */
 export async function startLocalCluster(logger: Logger, nodeCount?: LocalClusterNodeCount): Promise<void> {
 	if (process.platform !== 'win32') {
-		vscode.window.showWarningMessage('Local Service Fabric clusters are supported on Windows only.');
+		showLocalClusterUnsupported();
 		return;
 	}
 	const mode = nodeCount ?? (await pickNodeCount('Start cluster as'));
@@ -144,9 +217,12 @@ $cluster = Join-Path $sdk 'ClusterSetup\\DevClusterSetup.ps1'
 	await runPowerShell(logger, script, {});
 }
 
-/** `serviceFabric.cluster.stopLocal`: stops FabricHostSvc (Windows only; silently a no-op elsewhere). */
+/** `serviceFabric.cluster.stopLocal`: stops FabricHostSvc (Windows only). */
 export async function stopLocalCluster(logger: Logger): Promise<void> {
-	if (process.platform !== 'win32') return;
+	if (process.platform !== 'win32') {
+		showLocalClusterUnsupported();
+		return;
+	}
 	const script = `
 $ErrorActionPreference = 'Stop'
 Stop-Service FabricHostSvc -Force -ErrorAction SilentlyContinue
@@ -162,7 +238,10 @@ Stop-Service FabricHostSvc -Force -ErrorAction SilentlyContinue
  * passes both because it has already asked.
  */
 export async function resetLocalCluster(logger: Logger, nodeCount?: LocalClusterNodeCount, confirmed = false): Promise<void> {
-	if (process.platform !== 'win32') return;
+	if (process.platform !== 'win32') {
+		showLocalClusterUnsupported();
+		return;
+	}
 	if (
 		!confirmed &&
 		(vscode.workspace.getConfiguration('serviceFabric').get<boolean>('confirmDestructiveActions') ?? true) &&
@@ -193,7 +272,7 @@ $setup = Join-Path $sdk 'ClusterSetup\\DevClusterSetup.ps1'
 /** `serviceFabric.cluster.switchLocalMode`: recreates the cluster in the other mode and saves it as the default. */
 export async function switchLocalClusterMode(logger: Logger): Promise<void> {
 	if (process.platform !== 'win32') {
-		vscode.window.showWarningMessage('Local Service Fabric clusters are supported on Windows only.');
+		showLocalClusterUnsupported();
 		return;
 	}
 	const mode = await pickNodeCount('Switch local cluster to');

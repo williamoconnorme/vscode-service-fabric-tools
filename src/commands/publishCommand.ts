@@ -22,12 +22,17 @@ import {
 	detectClusterConnectionFailure,
 	parseApplicationParameterFile,
 	parsePublishProfile,
+	resolveApplicationName,
 	type PublishProfileSummary,
 } from '../deploy/deployScript';
+import { resolveDeployEngine, type DeployEngine } from '../deploy/deployEngine';
+import { DeployCancelledError, deployViaRest, type OverwriteBehavior } from '../deploy/restDeploy';
+import { parseStartupServiceParameterFile, parseStartupServices, type StartupServiceSpec } from '../deploy/startupServices';
 import { runPowerShell } from '../cluster/powerShellRunner';
 import { SfAuthError, type SfRestClient } from '../cluster/sfRestClient';
-import { configureClusterSecurity, createClusterClient, getEntraAccessToken } from '../cluster/clusterAuth';
-import type { ConnectionStore } from '../cluster/connectionStore';
+import { configureClusterSecurity, createClusterClient, getEntraAccessToken, securityOf } from '../cluster/clusterAuth';
+import type { ClusterConnection, ConnectionStore } from '../cluster/connectionStore';
+import type { ApplicationProject } from '../project/sfprojModel';
 import type { LocalClusterManager } from '../cluster/localCluster';
 import type { AutoAttachTelemetry } from '../debug/autoAttachState';
 import type { Logger } from '../util/logger';
@@ -40,9 +45,11 @@ interface ProfileParameterFiles {
 
 /**
  * `serviceFabric.publish`: restore NuGet packages, run the `Package` target,
- * locate the application package, probe the cluster and invoke the project's
- * `Deploy-FabricApplication.ps1` the way Visual Studio does. On success,
- * optionally hands off to the auto-attach flow.
+ * locate the application package, probe the cluster and deploy it, either by
+ * invoking the project's `Deploy-FabricApplication.ps1` the way Visual Studio
+ * does (PowerShell engine) or over the HTTP gateway (REST engine, see
+ * `serviceFabric.deploy.engine`). On success, optionally hands off to the
+ * auto-attach flow.
  *
  * `workspaceState` gates both the Tier 2 prompt and auto-attach; `telemetry`
  * is only needed for auto-attach.
@@ -56,10 +63,15 @@ export async function publishApplication(
 	workspaceState?: vscode.Memento,
 	telemetry?: AutoAttachTelemetry,
 ): Promise<void> {
-	if (process.platform !== 'win32') {
-		vscode.window.showWarningMessage('Deploy is supported on Windows only \u2014 the Service Fabric SDK is required.');
+	const engineChoice = resolveDeployEngine(
+		vscode.workspace.getConfiguration('serviceFabric').get<string>('deploy.engine'),
+		process.platform,
+	);
+	if ('error' in engineChoice) {
+		vscode.window.showErrorMessage(engineChoice.error);
 		return;
 	}
+	const engine = engineChoice.engine;
 	const project = await resolveTargetProject(watcher, target);
 	if (!project) return;
 	const publishProfile = await pickPublishProfile(project.publishProfiles);
@@ -68,6 +80,7 @@ export async function publishApplication(
 	const appParamFile = await pickApplicationParameterFile(project.applicationParameters, pairedFiles.applicationParameterFileAbs);
 
 	logger.show();
+	logger.info(`Deploy engine: ${engine === 'rest' ? 'REST (HTTP gateway)' : 'PowerShell (Deploy-FabricApplication.ps1)'}.`);
 	logger.info('Restoring NuGet packages...');
 	const restore = await vscode.window.withProgress(
 		{ location: vscode.ProgressLocation.Notification, title: 'Service Fabric: restoring NuGet packages\u2026' },
@@ -104,9 +117,9 @@ export async function publishApplication(
 	});
 
 	const deployScript = project.scripts.find((s) => /Deploy-FabricApplication\.ps1$/i.test(s));
-	if (!deployScript || !(await pathExists(deployScript))) {
+	if (engine === 'powershell' && (!deployScript || !(await pathExists(deployScript)))) {
 		vscode.window.showErrorMessage(
-			'Deploy-FabricApplication.ps1 not found under Scripts/. Restore the script from a Visual Studio template.',
+			'Deploy-FabricApplication.ps1 not found under Scripts/. Restore the script from a Visual Studio template, or set serviceFabric.deploy.engine to "rest".',
 		);
 		return;
 	}
@@ -245,20 +258,68 @@ Continuing will publish the wrong application. This choice is not remembered.`,
 			return;
 		}
 	}
-	const preflight = await ensureClusterReachableForDeploy(publishProfile, localCluster, logger);
+	const preflight = await ensureClusterReachableForDeploy(publishProfile, localCluster, logger, engine, connections);
 	if (!preflight) return;
+	const applicationTypeName = project.applicationManifest?.applicationTypeName;
+	const applicationName = applicationTypeName
+		? resolveApplicationName(
+				applicationTypeName,
+				(await readOptional(pairedFiles.applicationParameterFileAbs)) ?? (await readOptional(appParamFile)),
+			)
+		: undefined;
+	const deployed =
+		engine === 'powershell'
+			? await deployViaPowerShell(
+					project,
+					deployScript!,
+					packagePath,
+					publishProfile,
+					applicationParameter,
+					preflight.securityToken,
+					logger,
+				)
+			: await deployViaRestEngine(project, packagePath, publishProfile, pairedFiles, applicationParameter, preflight.client, logger);
+	if (!deployed) return;
+	vscode.window.showInformationMessage('Service Fabric deployment completed successfully.');
+	const active = connections.getActive();
+	if (active) await localCluster.refresh(active, { interactive: true });
+	if (active && workspaceState && telemetry && applicationTypeName && applicationName) {
+		try {
+			const { maybeAutoAttachAfterDeploy } = await import('../debug/autoAttachAfterDeploy');
+			await maybeAutoAttachAfterDeploy(
+				{
+					applicationName,
+					applicationTypeName,
+					clusterEndpoint: active.endpoint,
+					clusterSecurity: securityOf(active),
+					clusterKind: active.kind === 'local' ? 'local' : 'remote',
+					memento: workspaceState,
+				},
+				logger,
+				telemetry,
+			);
+		} catch (err) {
+			logger.warn(`Auto-attach hook threw: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+}
+
+/** Today's (and Visual Studio's) deploy: dot-source `Deploy-FabricApplication.ps1` in Windows PowerShell. */
+async function deployViaPowerShell(
+	project: ApplicationProject,
+	deployScript: string,
+	packagePath: string,
+	publishProfile: string,
+	applicationParameter: Record<string, string> | undefined,
+	securityToken: string | undefined,
+	logger: Logger,
+): Promise<boolean> {
 	const wrapper = buildDeployWrapper({
 		applicationParameter,
 		startupServicesFile: project.startupServicesManifest,
-		useSecurityToken: preflight.securityToken !== undefined,
+		useSecurityToken: securityToken !== undefined,
 	});
-	if (project.startupServicesManifest) {
-		logger.info('StartupServices.xml found \u2014 services declared in it will be created after the application is registered.');
-	} else {
-		logger.info(
-			'No StartupServices.xml \u2014 only the application type will be registered and an empty application instance created. Add services in StartupServices.xml (or via "Add Service") to deploy them automatically.',
-		);
-	}
+	logStartupServicesMode(project, logger);
 	logger.info(`Invoking ${deployScript}`);
 	const result = await runPowerShell(
 		logger,
@@ -270,42 +331,139 @@ Continuing will publish the wrong application. This choice is not remembered.`,
 			...(project.startupServicesManifest ? { StartupServicesFile: project.startupServicesManifest } : {}),
 		},
 		undefined,
-		{ capture: true, ...(preflight.securityToken ? { env: { SF_VSCODE_SECURITY_TOKEN: preflight.securityToken } } : {}) },
+		{ capture: true, ...(securityToken ? { env: { SF_VSCODE_SECURITY_TOKEN: securityToken } } : {}) },
 	);
-	if (result.exitCode === 0) {
-		vscode.window.showInformationMessage('Service Fabric deployment completed successfully.');
-		const active = connections.getActive();
-		if (active) await localCluster.refresh(active, { interactive: true });
-		if (active && workspaceState && telemetry && project.applicationManifest) {
-			try {
-				const { maybeAutoAttachAfterDeploy } = await import('../debug/autoAttachAfterDeploy');
-				const applicationTypeName = project.applicationManifest.applicationTypeName;
-				const applicationName = `fabric:/${applicationTypeName.replace(/Type$/, '')}`;
-				await maybeAutoAttachAfterDeploy(
-					{
-						applicationName,
-						applicationTypeName,
-						clusterEndpoint: active.endpoint,
-						clusterSecurity: { auth: active.auth, serverCert: active.serverCert },
-						clusterKind: active.kind === 'local' ? 'local' : 'remote',
-						memento: workspaceState,
-					},
-					logger,
-					telemetry,
-				);
-			} catch (err) {
-				logger.warn(`Auto-attach hook threw: ${err instanceof Error ? err.message : String(err)}`);
-			}
-		}
+	if (result.exitCode === 0) return true;
+	const diagnostic = detectClusterConnectionFailure(result.output ?? '');
+	if (diagnostic) {
+		vscode.window.showErrorMessage(`Deployment failed (exit code ${result.exitCode}). ${diagnostic}`);
+		logger.error(diagnostic);
 	} else {
-		const diagnostic = detectClusterConnectionFailure(result.output ?? '');
-		if (diagnostic) {
-			vscode.window.showErrorMessage(`Deployment failed (exit code ${result.exitCode}). ${diagnostic}`);
-			logger.error(diagnostic);
-		} else {
-			vscode.window.showErrorMessage(`Deployment failed (exit code ${result.exitCode}). See the Service Fabric output channel.`);
+		vscode.window.showErrorMessage(`Deployment failed (exit code ${result.exitCode}). See the Service Fabric output channel.`);
+	}
+	return false;
+}
+
+function logStartupServicesMode(project: ApplicationProject, logger: Logger): void {
+	if (project.startupServicesManifest) {
+		logger.info('StartupServices.xml found \u2014 services declared in it will be created after the application is registered.');
+	} else {
+		logger.info(
+			'No StartupServices.xml \u2014 only the application type will be registered and an empty application instance created. Add services in StartupServices.xml (or via "Add Service") to deploy them automatically.',
+		);
+	}
+}
+
+/**
+ * The REST engine: reads the package, parameters, StartupServices.xml and the
+ * profile's upgrade settings, then uploads, provisions and creates/upgrades the
+ * application over the HTTP gateway with a cancellable progress notification.
+ */
+async function deployViaRestEngine(
+	project: ApplicationProject,
+	packagePath: string,
+	publishProfile: string,
+	pairedFiles: ProfileParameterFiles,
+	applicationParameter: Record<string, string> | undefined,
+	client: SfRestClient,
+	logger: Logger,
+): Promise<boolean> {
+	const fail = (message: string): false => {
+		logger.error(message);
+		vscode.window.showErrorMessage(`Deployment failed. ${message}`);
+		return false;
+	};
+	let manifestXml: string;
+	try {
+		manifestXml = await fsp.readFile(path.join(packagePath, 'ApplicationManifest.xml'), 'utf8');
+	} catch (err) {
+		return fail(`Couldn't read ApplicationManifest.xml from ${packagePath}: ${(err as Error).message}`);
+	}
+	const typeName = /<ApplicationManifest\b[^>]*\bApplicationTypeName\s*=\s*"([^"]+)"/i.exec(manifestXml)?.[1];
+	const typeVersion = /<ApplicationManifest\b[^>]*\bApplicationTypeVersion\s*=\s*"([^"]+)"/i.exec(manifestXml)?.[1];
+	if (!typeName || !typeVersion) return fail(`${packagePath}/ApplicationManifest.xml has no ApplicationTypeName/ApplicationTypeVersion.`);
+
+	const profileXml = await readOptional(publishProfile);
+	const profile = profileXml ? parsePublishProfile(profileXml) : undefined;
+	const profileParamXml = await readOptional(pairedFiles.applicationParameterFileAbs);
+	// Profile's parameter file, overlaid with the picked file's values (like -ApplicationParameter).
+	const parameters = { ...(profileParamXml ? parseApplicationParameterFile(profileParamXml) : {}), ...applicationParameter };
+	const applicationName = resolveApplicationName(typeName, profileParamXml);
+
+	let startupServices: StartupServiceSpec[] = [];
+	logStartupServicesMode(project, logger);
+	if (project.startupServicesManifest) {
+		try {
+			const startupXml = await fsp.readFile(project.startupServicesManifest, 'utf8');
+			const overridesXml = await readOptional(pairedFiles.startupServiceParameterFileAbs);
+			startupServices = parseStartupServices(startupXml, overridesXml ? parseStartupServiceParameterFile(overridesXml) : {});
+		} catch (err) {
+			return fail(`Couldn't read StartupServices.xml: ${(err as Error).message}`);
 		}
 	}
+
+	const config = vscode.workspace.getConfiguration('serviceFabric');
+	const overwriteBehavior = config.get<OverwriteBehavior>('deploy.overwriteBehavior') ?? 'SameAppTypeAndVersion';
+	logger.info(
+		`Deploying ${applicationName} (${typeName} ${typeVersion}) to ${client.endpoint} over the HTTP gateway; ${Object.keys(parameters).length} parameter(s), ${startupServices.length} startup service(s), OverwriteBehavior=${overwriteBehavior}.`,
+	);
+	try {
+		await vscode.window.withProgress(
+			{ location: vscode.ProgressLocation.Notification, title: `Service Fabric: publishing ${applicationName}`, cancellable: true },
+			(progress, token) =>
+				deployViaRest(
+					client,
+					{
+						packageRoot: packagePath,
+						applicationTypeName: typeName,
+						applicationTypeVersion: typeVersion,
+						applicationName,
+						parameters,
+						startupServices,
+						profile: {
+							overwriteBehavior,
+							upgrade: profile?.upgrade,
+							copyPackageTimeoutSec: profile?.copyPackageTimeoutSec ?? config.get<number>('deploy.copyPackageTimeoutSec') ?? 600,
+							compressPackage: profile?.compressPackage,
+							registerApplicationTypeTimeoutSec: profile?.registerApplicationTypeTimeoutSec,
+						},
+						token,
+						progress: (message, increment) => progress.report({ message, increment }),
+					},
+					logger,
+				),
+		);
+		return true;
+	} catch (err) {
+		if (err instanceof DeployCancelledError) {
+			logger.warn('Deployment cancelled.');
+			vscode.window.showWarningMessage('Service Fabric deployment cancelled.');
+			return false;
+		}
+		return fail((err as Error).message);
+	}
+}
+
+async function readOptional(file: string | undefined): Promise<string | undefined> {
+	if (!file) return undefined;
+	try {
+		return await fsp.readFile(file, 'utf8');
+	} catch {
+		return undefined;
+	}
+}
+
+/** The saved connection for a gateway URL (same scheme, host and port), if any. */
+function findSavedConnection(connections: ConnectionStore, gateway: string): ClusterConnection | undefined {
+	const key = (u: string): string => {
+		try {
+			const parsed = new URL(u);
+			return `${parsed.protocol}//${parsed.hostname.toLowerCase()}:${parsed.port || (parsed.protocol === 'https:' ? '443' : '80')}`;
+		} catch {
+			return u;
+		}
+	};
+	return connections.list().find((c) => key(c.endpoint) === key(gateway));
 }
 
 /**
@@ -320,37 +478,60 @@ async function ensureClusterReachableForDeploy(
 	publishProfile: string,
 	_localCluster: LocalClusterManager,
 	logger: Logger,
-): Promise<{ securityToken?: string } | undefined> {
+	engine: DeployEngine,
+	connections: ConnectionStore,
+): Promise<{ securityToken?: string; client: SfRestClient } | undefined> {
+	// The REST engine needs a gateway even when the probe is skipped.
+	const localClient = (): SfRestClient => createClusterClient('http://localhost:19080');
 	let profile: PublishProfileSummary;
 	try {
 		const xml = await fsp.readFile(publishProfile, 'utf8');
 		profile = parsePublishProfile(xml);
 	} catch (err) {
 		logger.warn(`Skipping cluster probe — failed to parse publish profile: ${(err as Error).message}`);
-		return {};
+		return { client: localClient() };
 	}
 	const gateway = profile.httpGatewayUrl;
 	if (!gateway) {
+		if (engine === 'rest') {
+			vscode.window.showErrorMessage(
+				`Couldn't work out the cluster's HTTP gateway from ${path.basename(publishProfile)}'s ConnectionEndpoint (${profile.connectionEndpoint ?? 'none'}). Use host:port or an http(s):// URL.`,
+			);
+			return undefined;
+		}
 		logger.warn('Skipping cluster probe — no HTTP gateway could be inferred from the publish profile.');
-		return {};
+		return { client: localClient() };
 	}
 	let client: SfRestClient = createClusterClient(gateway);
 	let securityToken: string | undefined;
-	if (profile.usesEntra) {
+	// The REST engine talks to the gateway itself, so it needs the pinned server
+	// certificate and client certificate that PowerShell would get from the profile.
+	const restNeedsSecurity = engine === 'rest' && !profile.isLocal && (gateway.startsWith('https:') || Boolean(profile.usesX509));
+	if (profile.usesEntra || restNeedsSecurity) {
+		const saved = findSavedConnection(connections, gateway);
 		try {
-			const security = await configureClusterSecurity(gateway, logger, profile.serverCertThumbprints);
+			const security = await configureClusterSecurity(gateway, logger, {
+				knownThumbprints: [...new Set([...(profile.serverCertThumbprints ?? []), ...(saved?.serverCert?.thumbprints ?? [])])],
+				clientCertCriteria:
+					engine === 'rest' && profile.usesX509
+						? { findType: profile.clientCertFindType, findValue: profile.clientCertFindValue }
+						: undefined,
+				savedClientCert: saved?.clientCert,
+			});
 			if (!security) return undefined;
-			if (!security.auth) {
+			if (profile.usesEntra && !security.auth) {
 				vscode.window.showErrorMessage(
 					`The publish profile uses Microsoft Entra ID, but the cluster at ${gateway} doesn't report an Entra ID configuration.`,
 				);
 				return undefined;
 			}
-			securityToken = await getEntraAccessToken(security.auth, true, logger);
+			// Only the PowerShell engine needs the raw token (passed via the environment).
+			if (security.auth && engine === 'powershell') securityToken = await getEntraAccessToken(security.auth, true, logger);
 			client = createClusterClient(gateway, security, { interactive: true });
 		} catch (err) {
-			logger.error(`Microsoft Entra ID sign-in for ${gateway} failed: ${(err as Error).message}`);
-			vscode.window.showErrorMessage(`Microsoft Entra ID sign-in for ${gateway} failed: ${(err as Error).message}`);
+			const what = profile.usesEntra ? 'Microsoft Entra ID sign-in' : 'Connecting';
+			logger.error(`${what} for ${gateway} failed: ${(err as Error).message}`);
+			vscode.window.showErrorMessage(`${what} for ${gateway} failed: ${(err as Error).message}`);
 			return undefined;
 		}
 	}
@@ -358,7 +539,7 @@ async function ensureClusterReachableForDeploy(
 	try {
 		await client.getClusterHealth(5000);
 		logger.info('Cluster probe ok.');
-		return { securityToken };
+		return { securityToken, client };
 	} catch (err) {
 		logger.warn(`Cluster probe failed: ${(err as Error).message}`);
 		if (err instanceof SfAuthError) {
@@ -368,7 +549,7 @@ async function ensureClusterReachableForDeploy(
 					{ modal: true },
 					'Continue Anyway',
 				)) === 'Continue Anyway';
-			return proceed ? { securityToken } : undefined;
+			return proceed ? { securityToken, client } : undefined;
 		}
 	}
 	if (profile.isLocal) {
@@ -383,7 +564,7 @@ async function ensureClusterReachableForDeploy(
 			try {
 				await client.getClusterHealth(10000);
 				logger.info('Cluster probe ok after start.');
-				return {};
+				return { client };
 			} catch (err) {
 				vscode.window.showErrorMessage(`Cluster still unreachable after start: ${(err as Error).message}. Aborting deploy.`);
 				return undefined;
@@ -391,7 +572,7 @@ async function ensureClusterReachableForDeploy(
 		}
 		if (choice === 'Continue Anyway') {
 			logger.warn('Continuing deploy despite cluster probe failure (user override).');
-			return {};
+			return { client };
 		}
 		return undefined;
 	}
@@ -400,7 +581,7 @@ async function ensureClusterReachableForDeploy(
 		{ modal: true },
 		'Continue Anyway',
 	)) === 'Continue Anyway'
-		? { securityToken }
+		? { securityToken, client }
 		: undefined;
 }
 

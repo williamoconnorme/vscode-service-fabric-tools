@@ -816,6 +816,7 @@ function clusterTooltip(conn: ClusterConnection): string {
 	const lines = [`${conn.kind} cluster — ${conn.endpoint}`];
 	if (conn.auth) lines.push(`Sign-in: Microsoft Entra ID (tenant ${conn.auth.tenantId})`);
 	if (conn.serverCert?.thumbprints.length) lines.push(`Server certificate: ${conn.serverCert.thumbprints.join(', ')}`);
+	if (conn.clientCert) lines.push(`Client certificate: ${conn.clientCert.thumbprint} (${conn.clientCert.path})`);
 	if (conn.connected) {
 		lines.push(`Health: ${conn.aggregatedHealthState ?? 'Unknown'}`);
 		lines.push(`Nodes: ${conn.nodes?.length ?? 0}`);

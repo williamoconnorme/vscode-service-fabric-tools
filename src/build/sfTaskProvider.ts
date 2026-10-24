@@ -57,9 +57,13 @@ export async function createSfBuildTask(
 	scope?: vscode.WorkspaceFolder | vscode.TaskScope,
 ): Promise<vscode.Task> {
 	const msbuild = await locateMsBuild();
+	// `dotnet msbuild` doesn't restore the service projects' PackageReferences on
+	// its own (Visual Studio does); `-restore` runs Restore over the project graph first.
+	const restoreFirst = msbuild.leadingArgs[0] === 'msbuild' && target !== 'Clean';
 	const args = [
 		...msbuild.leadingArgs,
 		sfprojPath,
+		...(restoreFirst ? ['-restore'] : []),
 		`/t:${target}`,
 		`/p:Configuration=${configuration}`,
 		`/p:Platform=${platform}`,

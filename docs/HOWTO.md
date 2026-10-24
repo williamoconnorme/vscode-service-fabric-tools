@@ -32,10 +32,11 @@ This guide walks through every feature of the **Service Fabric Tools** extension
 | Capability | Requires |
 |---|---|
 | Authoring (tree, manifest validation, F12, code actions) | VS Code 1.90+, the `redhat.vscode-xml` extension (auto-installed as a dependency). Cross-platform. |
-| Build / Package | Windows. Visual Studio 2022 **or** Build Tools for VS 2022 with the *Azure development* workload + *Service Fabric Tools* component. |
-| Deploy / Remove | Windows. Service Fabric SDK (the `ServiceFabricSDK` PowerShell module is installed by the SDK setup). |
-| Local dev cluster | Windows. Service Fabric SDK (provides `FabricHostSvc` and the `Microsoft.ServiceFabric.ClusterSetup` PS modules). |
-| Debug attach | `ms-dotnettools.csharp` (or another CoreCLR debug adapter) for `.NET`. Windows + classic CLR debugger for `.NET Framework` services. |
+| Build / Package | **Windows:** Visual Studio 2022 **or** Build Tools for VS 2022 with the *Azure development* workload + *Service Fabric Tools* component. **macOS / Linux:** the .NET SDK (8 or later); the extension falls back to `dotnet msbuild`. `.NET Framework` services can't be built off Windows. |
+| Deploy / Remove — PowerShell engine | Windows. Service Fabric SDK (the `ServiceFabricSDK` PowerShell module is installed by the SDK setup). The default on Windows. |
+| Deploy / Remove — REST engine | Any OS. Only network access to the cluster's HTTP gateway (default port 19080); no Service Fabric SDK. The default on macOS / Linux. The cluster's image store must be `fabric:ImageStore`. See §8.4. |
+| Local dev cluster | Windows. Service Fabric SDK (provides `FabricHostSvc` and the `Microsoft.ServiceFabric.ClusterSetup` PS modules). On macOS / Linux see §6.4. |
+| Debug attach | Windows, with the service running on this machine (local cluster). `ms-dotnettools.csharp` (or another CoreCLR debug adapter) for `.NET`; classic CLR debugger for `.NET Framework` services. |
 
 ### 1.2 Install
 
@@ -161,6 +162,8 @@ When opening any `ApplicationManifest.xml` or `ServiceManifest.xml`, the extensi
 
 The schema is **discovered at runtime** from the locally installed Service Fabric SDK — typically `C:\Program Files\Microsoft SDKs\Service Fabric\schemas\ServiceFabricServiceModel.xsd`, with `C:\Program Files\Microsoft Service Fabric\bin\Fabric\Fabric.Code\` as a secondary fallback. If your install is in an unusual location, set `serviceFabric.xmlSchemaPath` to either the schemas folder or the `.xsd` file directly.
 
+On macOS / Linux there is no SDK installer: copy `ServiceFabricServiceModel.xsd` (from a Windows SDK install, or from the `microsoft/service-fabric` repository) into `~/.servicefabric/schemas/`, which is probed automatically, or point `serviceFabric.xmlSchemaPath` at it.
+
 If neither the SDK nor an override is present, the extension logs a one-time hint on the **Service Fabric** output channel and falls back to the in-house diagnostics described below — XSD validation will be unavailable but everything else continues to work. If you see a "must be declared" error from a third-party DTD-based XML extension, disable it for the workspace; only `redhat.vscode-xml` (LemMinX) is supported.
 
 ### 4.2 In-house diagnostics (`SFDxxx`)
@@ -223,7 +226,7 @@ The extension picks the first available MSBuild in this order:
 
 1. `serviceFabric.msbuildPath` setting, if non-empty.
 2. `vswhere.exe -latest -find MSBuild\\**\\Bin\\MSBuild.exe` (Visual Studio 2022 / Build Tools).
-3. `dotnet msbuild` from the .NET SDK (works for most targets but **cannot** drive the Service Fabric `Package` target).
+3. `dotnet msbuild` from the .NET SDK. This is the path on macOS / Linux. The Service Fabric MSBuild targets (`Microsoft.VisualStudio.Azure.Fabric.MSBuild` 1.7.9) load and run under .NET MSBuild, so **Package** works. The extension adds `-restore` so the service projects' `PackageReference`s are restored first (Visual Studio does that implicitly). The package lands in `pkg\<Configuration>\<AppName>\`.
 
 Check the **Service Fabric** output channel after a build to see which path was used.
 
@@ -241,13 +244,15 @@ Restore tries three strategies in order:
 2. **`MSBuild.exe /t:Restore /p:RestorePackagesConfig=true /p:RestorePackagesPath=<workspace>/packages`** — uses the same MSBuild discovered for build.
 3. **HTTPS download from `https://api.nuget.org/v3-flatcontainer/<id>/<ver>/<id>.<ver>.nupkg`** with in-process ZIP extraction (Node `zlib`, no native deps). Bounded to ≤4 missing packages.
 
+On macOS / Linux the order differs. Strategy 1 runs only when `mono` is on `PATH`, since `nuget.exe` is a .NET Framework program. Strategy 3 runs **before** strategy 2, because .NET MSBuild's Restore skips `packages.config` projects silently, so strategy 2 exits 0 without restoring anything.
+
 If all three fail, you'll see a modal error pointing at the install / manual restore / connectivity remediations. Subprocess output streams to the **Service Fabric** output channel.
 
 ---
 
 ## 6. Local development cluster lifecycle
 
-The local SDK cluster is driven through PowerShell modules shipped with the Service Fabric SDK.
+The local SDK cluster is driven through PowerShell modules shipped with the Service Fabric SDK, so these commands are Windows-only and hidden from the command palette elsewhere (see §6.4 for macOS / Linux).
 
 ### 6.1 Start
 
@@ -271,6 +276,16 @@ The command:
 
 Right-click a cluster → **Open in Service Fabric Explorer** opens the SF web UI in your default browser (`http://localhost:19080/Explorer/index.html` for local, or the saved gateway endpoint for remote). On any other row in the **Clusters** view the same command deep-links to that application, service, partition, replica, node or code package in Explorer.
 
+### 6.4 macOS / Linux: Docker "onebox"
+
+There is no local dev cluster for macOS. For a throwaway cluster, Microsoft publishes a Linux "onebox" container image (`mcr.microsoft.com/service-fabric/onebox`). Limitations:
+
+- **x64 only.** On Apple Silicon it runs under emulation, slowly and unreliably. A small remote dev cluster is usually the better choice.
+- It is a **Linux** cluster, so services must be built for `linux-x64` (pick *Linux* as the target cluster OS when scaffolding, see §11.1).
+- Debug attach doesn't work, because the processes live inside the container.
+
+Once it is running, **Connect to Local Cluster** (or **Connect to Remote Cluster…** with `http://localhost:19080`) and publish with a `Local.*` profile. The REST engine is used automatically.
+
 ---
 
 ## 7. Connecting to clusters (local & remote)
@@ -279,14 +294,26 @@ Right-click a cluster → **Open in Service Fabric Explorer** opens the SF web U
 
 **Service Fabric: Connect to Local Cluster** registers the connection at `http://localhost:19080`. The connection is stored in workspace state and survives reloads.
 
-### 7.2 Remote cluster (X.509 thumbprint)
+### 7.2 Remote cluster
 
-**Service Fabric: Connect to Remote Cluster…** prompts for:
+**Service Fabric: Connect to Remote Cluster…** prompts for the **endpoint** (e.g. `https://mycluster.westus.cloudapp.azure.com:19080`) and then works out the cluster's security on its own:
 
-1. **Endpoint** — e.g. `https://mycluster.westus.cloudapp.azure.com:19080`.
-2. **Server certificate thumbprint** — used for HTTPS validation pinning.
-3. **Client certificate thumbprint** (optional) — used for mutual TLS auth. The certificate must already be installed in `Cert:\\CurrentUser\\My`.
-4. **Friendly name** — what shows up in the tree.
+1. **Server certificate.** If the gateway's certificate isn't trusted by this machine (Service Fabric clusters usually use self-signed ones), a modal shows its subject, issuer and thumbprint and offers to **trust** (pin) it for this connection.
+2. **Microsoft Entra ID.** If the cluster publishes an Entra ID configuration, you sign in with the Azure CLI login or VS Code's Microsoft account (`serviceFabric.entra.*`).
+3. **X.509 client certificate.** Otherwise, if the gateway answers `403`, it needs a client certificate. Pick a `.pfx` / `.p12` file, or a PEM certificate (plus its key file when the PEM has no key). If the file has a passphrase you're asked for it. The extension shows the thumbprint, retries with the certificate, and offers to pick another one if the cluster still rejects it.
+4. **Display name** for the tree.
+
+Only the certificate's **path and thumbprint** are saved with the connection. The passphrase goes to VS Code's SecretStorage, which is the Keychain on macOS, Credential Manager on Windows and libsecret on Linux. It never appears in settings, workspace state, logs or a command line, and it survives restarts.
+
+Right-click a cluster → **Change Client Certificate…** to switch certificates (e.g. after a rotation). If a request is rejected with `403`, the error message offers the same action.
+
+Export a certificate from the Windows store with `certutil -exportPFX`, or build a PFX from PEM files with OpenSSL:
+
+```bash
+openssl pkcs12 -export -in admin.crt -inkey admin.key -out sf-admin.pfx -keypbe AES-256-CBC -certpbe AES-256-CBC
+```
+
+Older PFX exports encrypted with RC2/3DES can't be read by current Node/OpenSSL; re-export them with AES as above.
 
 Connections are persisted **per workspace** so different repos can carry distinct cluster lists.
 
@@ -302,8 +329,10 @@ The status-bar item, **Service Fabric: Select Active Cluster**, and the **Cluste
 
 1. Right-click a `.sfproj` → **Publish Application…**, or run **Service Fabric: Publish Application…** from the command palette.
 2. Pick a publish profile from `PublishProfiles\\*.xml`.
-3. The extension invokes `Deploy-FabricApplication.ps1` from the project's `Scripts` folder, passing the chosen profile and the active cluster's connection settings.
-4. PowerShell output streams live to the **Service Fabric** output channel. Errors in the host process are surfaced as a toast.
+3. The extension restores, packages, and then deploys with the engine chosen by **`serviceFabric.deploy.engine`**:
+   - **PowerShell** (default on Windows): invokes `Deploy-FabricApplication.ps1` from the project's `Scripts` folder, exactly as Visual Studio does.
+   - **REST** (default on macOS / Linux; opt-in on Windows with `"rest"`): uploads, provisions and creates/upgrades the application over the HTTP gateway. See §8.4.
+4. Output streams live to the **Service Fabric** output channel. Errors are surfaced as a toast.
 
 The connection sent to the script matches the active cluster — for local clusters it's a no-creds call; for remote clusters it includes the server thumbprint and (if supplied) client thumbprint.
 
@@ -373,9 +402,37 @@ The extension uses the same client-TCP-port translation as the deploy flow (HTTP
 
 Per-step progress is logged to the **Service Fabric** output channel.
 
+With the REST engine, Remove does the same over the gateway. It force-deletes every application of the type, waits up to `serviceFabric.remove.waitSeconds` for them to go away, then unprovisions every version of the type.
+
 ### 8.3 What gets uploaded
 
-The deploy script uploads the contents of `pkg\\<Configuration>\\<ApplicationTypeName>` (output of the `Package` target). If you've changed manifests but not run **Package**, the deploy runs against the previous package — re-package first.
+The deploy uploads the contents of `pkg\\<Configuration>\\<ApplicationTypeName>` (output of the `Package` target). Publish always runs **Package** first.
+
+### 8.4 Publishing from macOS / Linux (REST engine)
+
+The REST engine reproduces `Publish-NewServiceFabricApplication` / `Publish-UpgradedServiceFabricApplication` with gateway calls, so the same publish profile works from any OS:
+
+1. **Image store check.** Reads `ImageStoreConnectionString` from the cluster manifest. Only `fabric:ImageStore` (the default for Azure clusters) can be uploaded to over HTTP. For `file:` or `xstore:` stores Publish stops with a message suggesting the PowerShell engine on Windows or `sfctl application upload`.
+2. **Decide.** If the type version isn't registered, upload and provision it. If the application doesn't exist, create it. If it exists at the same version, apply **`serviceFabric.deploy.overwriteBehavior`** (default `SameAppTypeAndVersion`: delete the application, re-register the version, recreate). If it exists at an older version, upgrade when the profile has `<UpgradeDeployment Enabled="true">`; otherwise `Always` replaces it and the other values fail with an explanation.
+3. **Upload** to `/ImageStore/<Type>_<Version>_<random>`, four files at a time. Files over 4 MB go in 4 MB chunks through an upload session. The progress notification is cancellable. The overall time limit is the profile's `CopyPackageTimeoutSec`, else `serviceFabric.deploy.copyPackageTimeoutSec` (600 s). `CompressPackage` isn't supported yet; the package is uploaded uncompressed.
+4. **Provision**, then **create** or **upgrade**. For upgrades, the profile's `<UpgradeDeployment Mode>` and `<Parameters>` (`FailureAction`, `HealthCheck*Sec`, `UpgradeDomainTimeoutSec`, `UpgradeTimeoutSec`, `UpgradeReplicaSetCheckTimeoutSec`, `ForceRestart`, `ConsiderWarningAsError`, `MaxPercentUnhealthyDeployedApplications`, `DefaultServiceTypeHealthPolicy`) map onto the REST upgrade description. Unsupported keys are logged and ignored. Upgrade-domain progress streams to the output channel, and a rollback is reported as a failure.
+5. **StartupServices.xml.** After a fresh create, each `<Service>` in `StartupServices.xml` (parameters from the profile's `StartupServiceParameterFile`) that doesn't exist yet is created, matching the PowerShell script. Default services in `ApplicationManifest.xml` are created by the cluster.
+6. **Clean up.** The uploaded package is deleted from the image store on success, failure and cancellation. A version that was registered by a deploy that then failed is unregistered.
+
+**Application name and parameters** follow the PowerShell script: `<Application Name>` from the profile's `ApplicationParameterFile` (else `fabric:/<Type without "Type">`), with that file's parameters, overlaid by the file picked when `serviceFabric.deploy.promptForApplicationParameters` is on.
+
+**Certificates.** For an `https` gateway the server certificate is pinned from the profile's `ServerCertThumbprint` (or you're asked to trust it). For `X509Credential="true"` the client certificate named by `FindType` / `FindValue` is looked up in this order:
+
+1. The saved cluster connection's certificate, when its thumbprint (or subject CN for `FindBySubjectName`) matches.
+2. **`serviceFabric.clientCertificates`**, a map from `FindValue` to a file path:
+   ```json
+   "serviceFabric.clientCertificates": { "A1B2C3…": "~/certs/sf-admin.pfx" }
+   ```
+3. A file prompt, after which you're offered the option to save the choice to that setting.
+
+Entra ID profiles sign in as usual. With the REST engine, the token is used in-process and never passed to a child process.
+
+**Runtime identifier.** A Mac can build packages for either cluster OS. Services scaffolded with the default *Windows* target publish `win-x64` (`<Program>Svc.exe</Program>`), which is right for most Azure clusters. Choose *Linux* when scaffolding (§11.1) for Linux clusters. That sets `<RuntimeIdentifier>linux-x64</RuntimeIdentifier>` and a `<Program>` without `.exe`. For existing services, change both by hand.
 
 ---
 
@@ -384,6 +441,8 @@ The deploy script uploads the contents of `pkg\\<Configuration>\\<ApplicationTyp
 ### 9.1 The two-step model
 
 Service Fabric services are long-running host processes. Debugging means **attaching** to that process while the cluster is running, not launching a new one. The extension handles the discovery + attach for you.
+
+Attach works by process ID, so the service has to run on this machine: the local dev cluster on Windows. For remote clusters (and the Docker onebox on macOS / Linux) the command explains that instead of starting a failing session.
 
 ### 9.2 From the Clusters tree (recommended)
 
@@ -461,8 +520,9 @@ Diagnostic events require the `EventStoreService` system service to be enabled o
 1. **Application type name** — e.g. `Voting`. Becomes the folder + project + manifest name.
 2. **Initial service name** — e.g. `Voting.Web`. Becomes the package folder name (`<name>Pkg`) and the service type name (`<name>Type`).
 3. **Service kind** — same 9-item grouped picker as **Add Service** (see §11.2). Defaults to *Stateless Service (.NET Core)* to match historical behaviour.
-4. **Target framework** *(C# kinds only)* — `net8.0` / `net6.0` for `.NET Core` and ASP.NET, `net472` / `net48` for `.NET Framework`.
-5. **Target folder** — defaults to the workspace root.
+4. **Target framework** *(C# kinds only)* — `net10.0` / `net8.0` for `.NET Core` and ASP.NET, `net472` / `net48` for `.NET Framework`.
+5. **Target cluster OS** *(.NET Core and ASP.NET kinds)* — **Windows** (`win-x64`, `<Program><Svc>.exe</Program>`) or **Linux** (`linux-x64`, `<Program><Svc></Program>`). **Add New Service…** asks the same question.
+6. **Target folder** — defaults to the workspace root.
 
 The wizard produces a project tree that mirrors Visual Studio's "Service Fabric Application" template byte-for-byte, so the result can be opened later in Visual Studio (or projects authored in Visual Studio open here) without manual fix-up:
 
@@ -668,7 +728,8 @@ Idempotent — running it twice is safe; the second run reports zero consumers u
 | `serviceFabric.debug.autoAttachMaxSessions` | `5` | Maximum debug sessions auto-attach starts in a single Publish. Excess hosts are reported in the toast. Range 1–50. |
 | `serviceFabric.debug.autoAttachReadyTimeoutSec` | `30` | Seconds auto-attach waits for at least one replica to reach `Ready` before giving up. Range 5–300. |
 | `serviceFabric.sdkPath` | `""` | Override path to the SF SDK install root. |
-| `serviceFabric.powerShell.executable` | `auto` | `auto` (Windows PowerShell on Windows, `pwsh` elsewhere), `pwsh`, or `powershell`. |
+| `serviceFabric.powerShell.executable` | `auto` | `auto` (Windows PowerShell on Windows), `pwsh`, or `powershell`. The SDK's PowerShell module only exists on Windows; on macOS / Linux Publish and Remove use the REST engine. |
+| `serviceFabric.clientCertificates` | `{}` | Client certificate files for X.509-secured clusters, keyed by the publish profile's `FindValue` (thumbprint, or subject name for `FindBySubjectName`). Values are `.pfx`/`.p12` or PEM paths; `~` expands to the home folder. Used by the REST engine. Passphrases are kept in SecretStorage. See §8.4. |
 | `serviceFabric.confirmDestructiveActions` | `true` | Confirm before Remove / Reset Local Cluster. |
 | `serviceFabric.tree.showDeploymentStatus` | `true` | Badge applications that are deployed on the active cluster. |
 | `serviceFabric.diagnostics.enableManifestRules` | `true` | Enable `SFD00x` rules. |
@@ -677,8 +738,11 @@ Idempotent — running it twice is safe; the second run reports zero consumers u
 | `serviceFabric.deploy.suppressMsbuildEvaluatorPrompt` | `false` | Skip the modal prompt (1.2.0) that offers to enable `serviceFabric.deploy.useMsbuildPropertyEvaluator` when Tier 1 expansion leaves unresolved MSBuild properties. Power users / CI configurations can set this to `true` to keep Publish behavior strictly governed by `useMsbuildPropertyEvaluator`. Does not affect projects whose Tier 1 expansion resolves every token. See §8.1. |
 | `serviceFabric.deploy.searchMaxDepth` | `2` | Maximum directory depth for the per-candidate `ApplicationManifest.xml` search applied to each declared candidate (`serviceFabric.deploy.packagePath`, `<PackageLocation>`, `<OutputPath>`, `pkg\<Configuration>`, `bin\<Configuration>\pkg`, `bin\<Configuration>`). Default `2` covers the SDK template layouts; raise for shared monorepo output folders where manifests live 3+ levels under a common root. Range `1–16`; values outside the range fall back to the default and emit a warning. Set to `0` programmatically to require direct-match-only. See §8.1. |
 | `serviceFabric.deploy.promptForApplicationParameters` | `false` | When `true`, Publish asks which `ApplicationParameters\<env>.xml` to splat over the profile's defaults. When `false` (default), Publish uses the file paired with the publish profile via its `<ApplicationParameterFile>` element — a 5-node profile automatically pulls the 5-node parameters. See §8.1. |
+| `serviceFabric.deploy.engine` | `auto` | `auto` (PowerShell on Windows, REST elsewhere), `powershell` (Windows only), or `rest` (HTTP gateway, no SDK). See §8.1 / §8.4. |
+| `serviceFabric.deploy.overwriteBehavior` | `SameAppTypeAndVersion` | REST engine: what Publish does when the application exists and isn't being upgraded. `SameAppTypeAndVersion` replaces it only at the same version, `Always` replaces it whenever, `Never` fails. The PowerShell engine keeps the behavior of `Deploy-FabricApplication.ps1`. |
+| `serviceFabric.deploy.copyPackageTimeoutSec` | `600` | REST engine: overall time limit for the image-store upload. The profile's `CopyPackageTimeoutSec` takes precedence. |
 | `serviceFabric.remove.waitSeconds` | `30` | Maximum seconds to wait for the cluster to finish tearing down application instances of a type before unregistering it. `Remove-ServiceFabricApplication` is async — unregistering too soon produces *"Application type and version is still in use"*. Set to `0` to skip the wait (and accept the unregister may fail); raise it for slow remote clusters. See §8.2. |
-| `serviceFabric.xmlSchemaPath` | `""` | Override path to the Service Fabric XSDs. Folder containing `ServiceFabricServiceModel.xsd`, or a direct `.xsd` file. Empty falls back to the standard SDK install locations. See §6. |
+| `serviceFabric.xmlSchemaPath` | `""` | Override path to the Service Fabric XSDs. Folder containing `ServiceFabricServiceModel.xsd`, or a direct `.xsd` file. Empty falls back to the standard SDK install locations and `~/.servicefabric/schemas`. See §4.1. |
 | `serviceFabric.logLevel` | `info` | `error` / `warn` / `info` / `debug`. |
 | `serviceFabric.localCluster.endpoint` | `http://localhost:19080` | HTTP gateway endpoint for the local dev cluster. |
 | `serviceFabric.localCluster.nodeCount` | `5` | Default for **Start Local Cluster**. `1` or `5`. |
@@ -696,11 +760,12 @@ All commands live under the **Service Fabric** category in the command palette.
 | Open Help Guide | Opens this document in a side-by-side preview. |
 | Refresh / Refresh Clusters | Re-scans the workspace / re-probes every saved cluster connection. |
 | Build / Rebuild / Clean / Package Application | MSBuild target on the selected `.sfproj`. |
-| Publish Application… / Remove Application | Wraps the SDK deploy/remove scripts. |
+| Publish Application… / Remove Application | Deploys / removes through the SDK scripts (PowerShell engine) or the HTTP gateway (REST engine). See §8. |
 | Connect to Local Cluster / Connect to Remote Cluster… | Adds a connection. |
 | Disconnect | Removes a saved connection. |
+| Change Client Certificate… | Picks a new X.509 client certificate for a cluster, checks the gateway accepts it, and saves it. See §7.2. |
 | Select Active Cluster | Picks which connection drives deploy/attach/events. |
-| Start / Stop / Reset Local Cluster | Local SDK cluster lifecycle. |
+| Start / Stop / Reset Local Cluster | Local SDK cluster lifecycle (Windows only). |
 | Switch Local Cluster Mode (1-node ↔ 5-node)… | Reset + recreate at the chosen size. |
 | Open in Service Fabric Explorer | Opens the SFX web UI in the default browser, deep-linked to the right-clicked entity. |
 | Refresh (Clusters view rows) | Re-fetches one group or entity and its children from the gateway. On a cluster row it re-probes the connection. |
@@ -747,6 +812,9 @@ All commands live under the **Service Fabric** category in the command palette.
 - The fallback `dotnet msbuild` will compile but cannot drive the SF `Package` target.
 
 ### 14.3 Deploy fails with `ServiceFabricSDK module not found`
+
+- On macOS / Linux, set `serviceFabric.deploy.engine` back to `auto` or `rest`; the SDK module only exists on Windows.
+- On Windows without the SDK, set `serviceFabric.deploy.engine` to `rest`.
 
 - Install the Service Fabric SDK (Windows Web Platform Installer or the runtime + SDK MSIs).
 - Verify `Get-Module -ListAvailable ServiceFabricSDK` returns a result in the same PowerShell host the extension uses.
@@ -795,7 +863,7 @@ No network calls beyond:
 ## 16. FAQ
 
 **Does this work on macOS / Linux?**
-Authoring features (project recognition, manifests, F12, code actions) work everywhere. Build / package / deploy / local cluster / debug attach require Windows because the underlying tooling does.
+Yes, for everything except the local dev cluster and debug attach. Authoring works everywhere. Build and Package use `dotnet msbuild` (.NET services only). Publish and Remove use the REST engine against a remote cluster's HTTP gateway, with unsecured, server-certificate, X.509 client-certificate and Entra ID clusters all supported (§8.4). The local dev cluster and attaching the debugger need Windows. For a local cluster on macOS / Linux see the Docker onebox notes in §6.4.
 
 **Why does it depend on `redhat.vscode-xml`?**
 Microsoft does not ship a first-party XML extension for VS Code. `redhat.vscode-xml` is the industry-standard LemMinX-based language server, and it powers schema validation, hover, and IntelliSense for both manifests and `.sfproj` files. The dependency is automatic.

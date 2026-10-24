@@ -8,6 +8,7 @@ import {
 	type AddServiceTemplate,
 	type ServiceKind,
 	type ServiceRuntime,
+	type TargetClusterOs,
 } from '../scaffold/addServiceTemplates';
 import { ensureNugetRestored } from '../build/nugetRestore';
 import type { ApplicationProject } from '../project/sfprojModel';
@@ -23,6 +24,19 @@ export interface ServiceKindChoice {
 
 interface ValueQuickPickItem<T extends string> extends vscode.QuickPickItem {
 	value: T;
+}
+
+/**
+ * Asks which OS the cluster nodes run, for self-contained .NET services:
+ * Windows → `win-x64` + `<Program>Svc.exe`, Linux → `linux-x64` + `<Program>Svc`.
+ * `undefined` on cancel.
+ */
+export async function pickTargetClusterOs(): Promise<TargetClusterOs | undefined> {
+	const items: ValueQuickPickItem<TargetClusterOs>[] = [
+		{ label: 'Windows', description: 'win-x64 (default; Azure Service Fabric clusters usually run Windows)', value: 'windows' },
+		{ label: 'Linux', description: 'linux-x64, Program without .exe', value: 'linux' },
+	];
+	return (await vscode.window.showQuickPick(items, { placeHolder: 'Target cluster OS (decides the .NET runtime identifier)' }))?.value;
 }
 
 /** `serviceFabric.addService`: adds a new service package to an existing application. */
@@ -86,6 +100,11 @@ export async function runAddServiceCommand(projects: SfProjectWatcher, logger: L
 		});
 		if (!framework) return;
 		template = { ...template, targetFramework: framework.value };
+		if (isAspNetKind(kind) || runtime === 'netcore') {
+			const targetOs = await pickTargetClusterOs();
+			if (!targetOs) return;
+			template = { ...template, targetOs };
+		}
 		if (isAspNetKind(kind)) {
 			const https = await promptHttpsEndpoint();
 			if (https === 'cancel') return;

@@ -2,7 +2,8 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import type { Logger } from '../util/logger';
-import { pickServiceKind } from './addServiceCommand';
+import { pickServiceKind, pickTargetClusterOs } from './addServiceCommand';
+import type { TargetClusterOs } from '../scaffold/addServiceTemplates';
 import { isAspNetKind, isCsharpKind } from '../scaffold/addServiceTemplates';
 import { applyCreateApplication, type CreateApplicationResult } from '../scaffold/createApplicationApply';
 import { newProjectGuid } from '../scaffold/createApplicationTemplates';
@@ -41,6 +42,7 @@ export async function runCreateApplicationCommand(logger: Logger): Promise<void>
 	if (!choice) return;
 	const { kind, runtime } = choice;
 	let targetFramework: string | undefined;
+	let targetOs: TargetClusterOs | undefined;
 	if (isCsharpKind(kind)) {
 		const frameworks: FrameworkQuickPickItem[] =
 			isAspNetKind(kind) || runtime === 'netcore'
@@ -55,6 +57,10 @@ export async function runCreateApplicationCommand(logger: Logger): Promise<void>
 		const framework = await vscode.window.showQuickPick(frameworks, { placeHolder: 'Target framework for the seeded service' });
 		if (!framework) return;
 		targetFramework = framework.value;
+		if (isAspNetKind(kind) || runtime === 'netcore') {
+			targetOs = await pickTargetClusterOs();
+			if (!targetOs) return;
+		}
 	}
 	const targetDirectory = path.join(folder.uri.fsPath, applicationName);
 	if (fs.existsSync(targetDirectory)) {
@@ -80,6 +86,7 @@ export async function runCreateApplicationCommand(logger: Logger): Promise<void>
 			kind,
 			runtime,
 			targetFramework,
+			targetOs,
 		});
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);

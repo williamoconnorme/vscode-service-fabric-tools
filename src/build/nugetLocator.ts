@@ -50,6 +50,9 @@ export async function locateNuget(): Promise<NugetLocation | undefined> {
 		if (fromVswhere) {
 			return { executable: fromVswhere, description: `vswhere: ${fromVswhere}`, kind: 'vswhere' };
 		}
+	} else if (!(await which('mono'))) {
+		// nuget.exe is a .NET Framework program: off Windows it only runs under Mono.
+		return undefined;
 	}
 	const onPath = await locateOnPath();
 	if (onPath) {
@@ -83,9 +86,14 @@ async function locateViaVswhere(): Promise<string | undefined> {
 	});
 }
 
-async function locateOnPath(): Promise<string | undefined> {
+function locateOnPath(): Promise<string | undefined> {
+	return which(process.platform === 'win32' ? 'nuget.exe' : 'nuget');
+}
+
+/** First match of `where.exe` (Windows) / `which` (elsewhere) for `name`. */
+async function which(name: string): Promise<string | undefined> {
 	const cmd = process.platform === 'win32' ? 'where.exe' : 'which';
-	const arg = process.platform === 'win32' ? 'nuget.exe' : 'nuget';
+	const arg = name;
 	return new Promise((resolve) => {
 		const child = cp.spawn(cmd, [arg], { windowsHide: true });
 		let out = '';

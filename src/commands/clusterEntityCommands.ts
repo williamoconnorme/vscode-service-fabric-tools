@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import type { ClusterConnection, ConnectionStore } from '../cluster/connectionStore';
 import type { LocalClusterManager } from '../cluster/localCluster';
 import { createClientForConnection } from '../cluster/clusterAuth';
+import { reportClusterAuthFailure } from './clusterCommands';
 import type { NodeDeactivationIntent, SfRestClient } from '../cluster/sfRestClient';
 import type { ClusterDocumentProvider } from '../views/clusterDocuments';
 import type { ClusterEntityRef, ClustersTreeProvider, ClusterTreeItem } from '../views/clustersTreeProvider';
@@ -37,7 +38,11 @@ export function clusterEntityCommands(ctx: ClusterCommandContext): [string, (ite
 				);
 				return;
 			}
-			await handler(ctx, item, createClientForConnection(item.connection, { interactive: true }), item.connection);
+			try {
+				await handler(ctx, item, createClientForConnection(item.connection, { interactive: true }), item.connection);
+			} catch (err) {
+				if (!(await reportClusterAuthFailure(err, item.connection))) throw err;
+			}
 		};
 	return [
 		['serviceFabric.cluster.refreshNode', bind(refreshNode, false)],

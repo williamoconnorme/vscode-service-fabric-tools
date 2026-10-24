@@ -1,4 +1,5 @@
 import * as nodeFs from 'node:fs';
+import * as nodeOs from 'node:os';
 import * as nodePath from 'node:path';
 
 export const SERVICE_FABRIC_SCHEMA_FILE = 'ServiceFabricServiceModel.xsd';
@@ -7,6 +8,8 @@ export const DEFAULT_SCHEMA_PROBE: readonly string[] = [
 	'C:\\Program Files\\Microsoft SDKs\\Service Fabric\\schemas',
 	'C:\\Program Files (x86)\\Microsoft SDKs\\Service Fabric\\schemas',
 	'C:\\Program Files\\Microsoft Service Fabric\\bin\\Fabric\\Fabric.Code',
+	// macOS / Linux: no SDK installer; drop the XSD here (or set serviceFabric.xmlSchemaPath).
+	nodePath.join(nodeOs.homedir(), '.servicefabric', 'schemas'),
 ];
 
 export interface SchemaProbeOptions {

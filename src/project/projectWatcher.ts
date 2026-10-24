@@ -81,6 +81,8 @@ export class SfProjectWatcher implements vscode.Disposable {
 	}
 }
 
+/** Map key for a project path: `/` separators, and case-folded only where the file system is (Windows). */
 function normalizeProjectKey(p: string): string {
-	return p.replace(/\\/g, '/').toLowerCase();
+	const slashed = p.replace(/\\/g, '/');
+	return process.platform === 'win32' ? slashed.toLowerCase() : slashed;
 }

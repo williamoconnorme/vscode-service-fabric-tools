@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import type { ClusterNodeInfo, DeployedApplicationInfo } from './sfRestClient';
 import type { EntraClusterAuth } from './clusterAuth';
 import type { ServerCertPin } from './tlsPinning';
+import type { ClientCertRef } from './clientCert';
 
 export type { ClusterNodeInfo, DeployedApplicationInfo };
 
@@ -22,6 +23,8 @@ export interface ClusterConnection {
 	auth?: EntraClusterAuth;
 	/** Pinned gateway certificate for https clusters. */
 	serverCert?: ServerCertPin;
+	/** X.509 client certificate file (path and thumbprint only; the passphrase is in SecretStorage). */
+	clientCert?: ClientCertRef;
 }
 
 const STORE_KEY = 'serviceFabric.connections';

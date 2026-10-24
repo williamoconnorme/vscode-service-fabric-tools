@@ -122,9 +122,10 @@ export function collectPackageRootCandidates(
 	push(input.settingOverride, 'serviceFabric.deploy.packagePath');
 	push(input.packageLocation, 'sfproj <PackageLocation>');
 	push(input.outputPath, 'sfproj <OutputPath>');
-	push(join('pkg', cfg), `default pkg\\${cfg}`);
-	push(join('bin', cfg, 'pkg'), `bin\\${cfg}\\pkg`);
-	push(join('bin', cfg), `bin\\${cfg}`);
+	const sep = process.platform === 'win32' ? '\\' : '/';
+	push(join('pkg', cfg), `default pkg${sep}${cfg}`);
+	push(join('bin', cfg, 'pkg'), `bin${sep}${cfg}${sep}pkg`);
+	push(join('bin', cfg), `bin${sep}${cfg}`);
 	return out;
 }
 
@@ -382,12 +383,13 @@ async function searchForManifest(fs: ProbeFs, root: string, maxDepth: number): P
 }
 
 // We keep our own tiny path helpers here so this module stays free of
-// `path`/`fs` imports and runs identically under any test harness.
+// `path`/`fs` imports and runs identically under any test harness. Joins with
+// the separator the base path already uses: `\` for Windows paths (drive
+// letter or backslashes), `/` otherwise, so POSIX hosts get real paths.
 function joinPosix(...parts: string[]): string {
-	return parts
-		.filter((p) => p && p.length > 0)
-		.join('\\')
-		.replace(/[\\/]+/g, '\\');
+	const kept = parts.filter((p) => p && p.length > 0);
+	const sep = /^[A-Za-z]:|\\/.test(kept[0] ?? '') ? '\\' : '/';
+	return kept.join(sep).replace(/[\\/]+/g, sep);
 }
 
 function baseName(p: string): string {

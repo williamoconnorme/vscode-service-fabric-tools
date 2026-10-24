@@ -11,6 +11,7 @@
 import * as https from 'https';
 import * as net from 'net';
 import * as tls from 'tls';
+import type { ClientCertMaterial } from './clientCert';
 
 /** A pinned gateway certificate. */
 export interface ServerCertPin {
@@ -90,12 +91,15 @@ export function probeServerCertificate(endpoint: string, timeoutMs = 5000): Prom
  * An https agent that accepts a server certificate only if its thumbprint is
  * pinned. The check runs after the TLS handshake and before the socket is
  * handed to the request, so no request bytes (including bearer tokens) reach an
- * unpinned server.
+ * unpinned server. `clientCert`, when given, is presented to the gateway.
  */
 export class PinnedCertAgent extends https.Agent {
 	private readonly pinned: Set<string>;
 
-	constructor(pin: ServerCertPin) {
+	constructor(
+		pin: ServerCertPin,
+		private readonly clientCert?: ClientCertMaterial,
+	) {
 		super({ keepAlive: false });
 		this.pinned = new Set(pin.thumbprints.map(normalizeThumbprint));
 	}
@@ -104,7 +108,7 @@ export class PinnedCertAgent extends https.Agent {
 	// returning undefined makes it wait for the callback.
 	createConnection(options: tls.ConnectionOptions, callback: (err: Error | null, socket?: net.Socket) => void): undefined {
 		const host = String(options.host ?? 'localhost');
-		const socket = tls.connect({ ...connectOptions(host, Number(options.port ?? 443)), timeout: options.timeout });
+		const socket = tls.connect({ ...connectOptions(host, Number(options.port ?? 443)), ...this.clientCert, timeout: options.timeout });
 		const onError = (err: Error): void => callback(err);
 		socket.once('error', onError);
 		socket.once('secureConnect', () => {

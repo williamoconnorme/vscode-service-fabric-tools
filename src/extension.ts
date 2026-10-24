@@ -3,6 +3,7 @@ import { createLogger, type LogLevel } from './util/logger';
 import { SfProjectWatcher } from './project/projectWatcher';
 import { ApplicationsTreeProvider } from './views/applicationsTreeProvider';
 import { ConnectionStore } from './cluster/connectionStore';
+import { ClientCertManager, registerClientCertManager } from './cluster/clientCertStore';
 import { LocalClusterManager } from './cluster/localCluster';
 import {
 	ClustersTreeProvider,
@@ -26,6 +27,7 @@ import { ensureNugetRestored } from './build/nugetRestore';
 import { publishApplication } from './commands/publishCommand';
 import { removeApplication } from './commands/removeCommand';
 import {
+	changeClientCertificate,
 	connectLocalCluster,
 	connectRemoteCluster,
 	disconnectCluster,
@@ -73,6 +75,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	});
 	context.subscriptions.push(applicationsView);
 
+	registerClientCertManager(new ClientCertManager(context.secrets, logger));
 	const connections = new ConnectionStore(context);
 	context.subscriptions.push(connections);
 	const localCluster = new LocalClusterManager(connections, logger);
@@ -240,6 +243,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		['serviceFabric.cluster.connectLocal', () => connectLocalCluster(localCluster)],
 		['serviceFabric.cluster.connectRemote', () => connectRemoteCluster(connections, localCluster, logger)],
 		['serviceFabric.cluster.disconnect', (node?: ClusterTreeItem) => disconnectCluster(connections, node?.connection)],
+		[
+			'serviceFabric.cluster.changeClientCertificate',
+			(node?: Pick<ClusterTreeItem, 'connection'>) => changeClientCertificate(connections, localCluster, logger, node?.connection),
+		],
 		['serviceFabric.cluster.selectActive', () => selectActiveCluster(connections)],
 		['serviceFabric.cluster.startLocal', () => startLocalCluster(logger)],
 		['serviceFabric.cluster.stopLocal', () => stopLocalCluster(logger)],

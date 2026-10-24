@@ -162,6 +162,31 @@ export interface PublishProfileSummary {
 	usesEntra?: boolean;
 	/** Normalized `ServerCertThumbprint` values (comma-separated in the profile during rollover). */
 	serverCertThumbprints?: string[];
+	/** True when the profile connects with `X509Credential="true"` (client certificate). */
+	usesX509?: boolean;
+	/** `FindType` of the client certificate (`FindByThumbprint` / `FindBySubjectName`). */
+	clientCertFindType?: string;
+	/** `FindValue` of the client certificate (a thumbprint or a subject name). */
+	clientCertFindValue?: string;
+	/** `<UpgradeDeployment>`, when present. */
+	upgrade?: PublishProfileUpgrade;
+	/** `<CopyPackageParameters CopyPackageTimeoutSec>`. */
+	copyPackageTimeoutSec?: number;
+	/** `<CopyPackageParameters CompressPackage>`. */
+	compressPackage?: boolean;
+	/** `<RegisterApplicationParameters RegisterApplicationTypeTimeoutSec>`. */
+	registerApplicationTypeTimeoutSec?: number;
+}
+
+/** Rolling upgrade mode, from `<UpgradeDeployment Mode>`. */
+export type UpgradeMode = 'Monitored' | 'UnmonitoredAuto' | 'UnmonitoredManual';
+
+/** A publish profile's `<UpgradeDeployment Mode Enabled><Parameters .../></UpgradeDeployment>`. */
+export interface PublishProfileUpgrade {
+	enabled: boolean;
+	mode: UpgradeMode;
+	/** `<Parameters>` attributes verbatim (names as `Start-ServiceFabricApplicationUpgrade` parameters). */
+	parameters: Record<string, string>;
 }
 
 /**
@@ -172,38 +197,96 @@ export function parsePublishProfile(xml: string): PublishProfileSummary {
 	// <ApplicationParameterFile> / <StartupServiceParameterFile> are flat,
 	// self-closing elements with a single `Path` attribute. Capture the path
 	// verbatim — the caller resolves it against the profile's directory.
-	const appParamFile = extractPathAttr(xml, 'ApplicationParameterFile');
-	const startupParamFile = extractPathAttr(xml, 'StartupServiceParameterFile');
+	const common = {
+		applicationParameterFile: extractPathAttr(xml, 'ApplicationParameterFile'),
+		startupServiceParameterFile: extractPathAttr(xml, 'StartupServiceParameterFile'),
+		...parseDeploySettings(xml),
+	};
 	const m = CONNECTION_ENDPOINT_RE.exec(xml);
-	if (!m) {
-		// No <ClusterConnectionParameters> at all: treat as local.
-		return {
-			isLocal: true,
-			httpGatewayUrl: 'http://localhost:19080',
-			applicationParameterFile: appParamFile,
-			startupServiceParameterFile: startupParamFile,
-		};
-	}
-	const attrs = m[1] ?? '';
+	const attrs = m?.[1] ?? '';
 	const endpoint = ATTR_RE('ConnectionEndpoint').exec(attrs)?.[1]?.trim();
 	if (!endpoint) {
-		return {
-			isLocal: true,
-			httpGatewayUrl: 'http://localhost:19080',
-			applicationParameterFile: appParamFile,
-			startupServiceParameterFile: startupParamFile,
-		};
+		// No <ClusterConnectionParameters>, or one without an endpoint: treat as local.
+		return { isLocal: true, httpGatewayUrl: 'http://localhost:19080', ...common };
 	}
-	const httpGatewayUrl = inferHttpGateway(endpoint, attrs);
+	const usesX509 = /\bX509Credential\s*=\s*"true"/i.test(attrs);
 	return {
 		isLocal: false,
 		connectionEndpoint: endpoint,
-		httpGatewayUrl,
-		applicationParameterFile: appParamFile,
-		startupServiceParameterFile: startupParamFile,
+		httpGatewayUrl: inferHttpGateway(endpoint, attrs),
+		...common,
 		usesEntra: /\bAzureActiveDirectory\s*=\s*"true"/i.test(attrs),
 		serverCertThumbprints: parseThumbprintList(ATTR_RE('ServerCertThumbprint').exec(attrs)?.[1]),
+		usesX509,
+		...(usesX509
+			? {
+					clientCertFindType: ATTR_RE('FindType').exec(attrs)?.[1]?.trim() || 'FindByThumbprint',
+					clientCertFindValue: ATTR_RE('FindValue').exec(attrs)?.[1]?.trim() || undefined,
+				}
+			: {}),
 	};
+}
+
+/** Attributes of the first `<{tag}>` element in `xml`, or `undefined` when there is none. */
+function elementAttributes(xml: string, tag: string): Record<string, string> | undefined {
+	const m = new RegExp(`<${tag}\\b([^>]*?)/?>`, 'i').exec(xml);
+	if (!m) return undefined;
+	const out: Record<string, string> = {};
+	const attrRe = /([A-Za-z_][\w.-]*)\s*=\s*"([^"]*)"/g;
+	let a: RegExpExecArray | null;
+	while ((a = attrRe.exec(m[1] ?? '')) !== null) out[a[1]] = a[2];
+	return out;
+}
+
+function toPositiveInt(value: string | undefined): number | undefined {
+	if (value === undefined || value.trim() === '') return undefined;
+	const n = Number(value);
+	return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
+}
+
+/** The upgrade / copy / register settings of a publish profile. */
+function parseDeploySettings(
+	xml: string,
+): Pick<PublishProfileSummary, 'upgrade' | 'copyPackageTimeoutSec' | 'compressPackage' | 'registerApplicationTypeTimeoutSec'> {
+	const out: Pick<PublishProfileSummary, 'upgrade' | 'copyPackageTimeoutSec' | 'compressPackage' | 'registerApplicationTypeTimeoutSec'> =
+		{};
+	const upgradeBlock = /<UpgradeDeployment\b[\s\S]*?(?:\/>|<\/UpgradeDeployment>)/i.exec(xml)?.[0];
+	if (upgradeBlock) {
+		const attrs = elementAttributes(upgradeBlock, 'UpgradeDeployment') ?? {};
+		const modeText = (attrs.Mode ?? '').trim();
+		const mode: UpgradeMode = /^Monitored$/i.test(modeText)
+			? 'Monitored'
+			: /^UnmonitoredManual$/i.test(modeText)
+				? 'UnmonitoredManual'
+				: 'UnmonitoredAuto';
+		out.upgrade = {
+			enabled: /^true$/i.test((attrs.Enabled ?? '').trim()),
+			mode,
+			parameters: elementAttributes(upgradeBlock.replace(/^<UpgradeDeployment\b[^>]*>/i, ''), 'Parameters') ?? {},
+		};
+	}
+	const copy = elementAttributes(xml, 'CopyPackageParameters');
+	if (copy) {
+		out.copyPackageTimeoutSec = toPositiveInt(copy.CopyPackageTimeoutSec);
+		if (copy.CompressPackage !== undefined) out.compressPackage = /^true$/i.test(copy.CompressPackage.trim());
+	}
+	out.registerApplicationTypeTimeoutSec = toPositiveInt(
+		elementAttributes(xml, 'RegisterApplicationParameters')?.RegisterApplicationTypeTimeoutSec,
+	);
+	return out;
+}
+
+/**
+ * The application name a deploy creates: `<Application Name="fabric:/…">` from
+ * the application parameter file when present, else `fabric:/<TypeName>` with a
+ * trailing `Type` removed. Same rule as `Publish-NewServiceFabricApplication`.
+ */
+export function resolveApplicationName(applicationTypeName: string, applicationParameterXml?: string): string {
+	const fromFile = applicationParameterXml
+		? /<Application\b[^>]*\bName\s*=\s*"([^"]+)"/i.exec(applicationParameterXml)?.[1]?.trim()
+		: undefined;
+	if (fromFile) return fromFile.startsWith('fabric:/') ? fromFile : `fabric:/${fromFile}`;
+	return `fabric:/${applicationTypeName.replace(/Type$/, '')}`;
 }
 
 /**

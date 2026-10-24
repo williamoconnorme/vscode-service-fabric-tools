@@ -33,7 +33,7 @@ export async function runPowerShell(
 	token?: vscode.CancellationToken,
 	options: RunPowerShellOptions = {},
 ): Promise<PowerShellResult> {
-	const executable = resolvePowerShellExecutable();
+	const executable = resolvePowerShellExecutable(logger);
 	const command = buildScriptWithParameters(script, parameters);
 	const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command];
 	logger.info(`Running ${executable} (script length ${command.length} chars)`);
@@ -59,8 +59,18 @@ export async function runPowerShell(
 	});
 }
 
-/** `serviceFabric.powerShell.executable`: `auto` means Windows PowerShell on Windows, `pwsh` elsewhere. */
-function resolvePowerShellExecutable(): string {
+/**
+ * `serviceFabric.powerShell.executable`: `auto` means Windows PowerShell on
+ * Windows. Elsewhere `auto` falls back to `pwsh` with a warning: the Service
+ * Fabric SDK module doesn't exist there, so SF scripts will fail (Publish and
+ * Remove use the REST engine instead; see `serviceFabric.deploy.engine`).
+ */
+function resolvePowerShellExecutable(logger: Logger): string {
 	const setting = vscode.workspace.getConfiguration('serviceFabric').get<string>('powerShell.executable') ?? 'auto';
-	return setting === 'pwsh' ? 'pwsh' : setting === 'powershell' || process.platform === 'win32' ? 'powershell' : 'pwsh';
+	if (setting === 'pwsh') return 'pwsh';
+	if (setting === 'powershell' || process.platform === 'win32') return 'powershell';
+	logger.warn(
+		'Running PowerShell via pwsh: the Service Fabric SDK PowerShell module is only available on Windows, so SDK cmdlets will fail.',
+	);
+	return 'pwsh';
 }

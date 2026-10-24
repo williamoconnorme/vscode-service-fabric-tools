@@ -108,6 +108,7 @@ export function applyCreateApplication(opts: CreateApplicationOptions): CreateAp
 		runtime: opts.runtime ?? 'netcore',
 		version: opts.serviceVersion ?? '1.0.0',
 		targetFramework: opts.targetFramework,
+		targetOs: opts.targetOs,
 	};
 	const seededSettings = seededIsCsharp ? resolveCsharpSettings(seededTemplate) : undefined;
 	const seededCsprojDir = seededIsCsharp && seededSettings ? path.join(repoDir, seededSettings.csprojDirName) : undefined;
