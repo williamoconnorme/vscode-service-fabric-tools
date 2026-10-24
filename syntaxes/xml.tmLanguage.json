@@ -1,0 +1,8 @@
+{
+    "scopeName": "text.xml.sfproj",
+    "name": "sfproj",
+    "fileTypes": ["sfproj"],
+    "patterns": [
+        { "include": "text.xml" }
+    ]
+}

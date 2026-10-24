@@ -1,0 +1,778 @@
+{
+    "name": "service-fabric-project-tools-vscode",
+    "displayName": "Service Fabric Project (sfproj) Tools",
+    "description": "First-class authoring, build, package, deploy, and debug support for Azure Service Fabric application projects (.sfproj) in VS Code.",
+    "version": "1.1.11",
+    "publisher": "sfproj-tools",
+    "license": "MIT",
+    "icon": "media/icon.png",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/coyesiku_microsoft/vscode-sfproj-tools.git"
+    },
+    "bugs": {
+        "url": "https://github.com/coyesiku_microsoft/vscode-sfproj-tools/issues"
+    },
+    "homepage": "https://github.com/coyesiku_microsoft/vscode-sfproj-tools#readme",
+    "engines": {
+        "vscode": "^1.90.0"
+    },
+    "categories": [
+        "Programming Languages",
+        "Azure",
+        "Other"
+    ],
+    "keywords": [
+        "service fabric",
+        "sfproj",
+        "azure",
+        "msbuild"
+    ],
+    "main": "./dist/extension.js",
+    "activationEvents": [
+        "workspaceContains:**/*.sfproj",
+        "onCommand:serviceFabric.createApplication"
+    ],
+    "extensionDependencies": [
+        "redhat.vscode-xml"
+    ],
+    "contributes": {
+        "languages": [
+            {
+                "id": "sfproj",
+                "aliases": [
+                    "Service Fabric Project",
+                    "sfproj"
+                ],
+                "extensions": [
+                    ".sfproj"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "sfproj",
+                "scopeName": "text.xml",
+                "path": "./syntaxes/xml.tmLanguage.json"
+            }
+        ],
+        "viewsContainers": {
+            "activitybar": [
+                {
+                    "id": "serviceFabric",
+                    "title": "Service Fabric",
+                    "icon": "$(server-environment)"
+                }
+            ]
+        },
+        "views": {
+            "serviceFabric": [
+                {
+                    "id": "serviceFabric.applications",
+                    "name": "Applications",
+                    "icon": "$(package)",
+                    "contextualTitle": "Service Fabric"
+                },
+                {
+                    "id": "serviceFabric.clusters",
+                    "name": "Clusters",
+                    "icon": "$(server)",
+                    "contextualTitle": "Service Fabric"
+                }
+            ]
+        },
+        "viewsWelcome": [
+            {
+                "view": "serviceFabric.applications",
+                "contents": "No Service Fabric application projects (.sfproj) found in the current workspace.\n[Create New Application](command:serviceFabric.createApplication)\n[Open Folder](command:vscode.openFolder)\n[Open Help Guide](command:serviceFabric.openHelp)"
+            },
+            {
+                "view": "serviceFabric.clusters",
+                "contents": "No Service Fabric clusters configured.\n[Connect to Local Cluster](command:serviceFabric.cluster.connectLocal)\n[Connect to Remote Cluster…](command:serviceFabric.cluster.connectRemote)\n[Open Help Guide](command:serviceFabric.openHelp)"
+            }
+        ],
+        "commands": [
+            {
+                "command": "serviceFabric.refreshApplications",
+                "title": "Refresh",
+                "category": "Service Fabric",
+                "icon": "$(refresh)"
+            },
+            {
+                "command": "serviceFabric.refreshClusters",
+                "title": "Refresh Clusters",
+                "category": "Service Fabric",
+                "icon": "$(refresh)"
+            },
+            {
+                "command": "serviceFabric.openFile",
+                "title": "Open",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.build",
+                "title": "Build",
+                "category": "Service Fabric",
+                "icon": "$(tools)"
+            },
+            {
+                "command": "serviceFabric.rebuild",
+                "title": "Rebuild",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.clean",
+                "title": "Clean",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.package",
+                "title": "Package Application",
+                "category": "Service Fabric",
+                "icon": "$(package)"
+            },
+            {
+                "command": "serviceFabric.restore",
+                "title": "Restore NuGet Packages",
+                "category": "Service Fabric",
+                "icon": "$(cloud-download)"
+            },
+            {
+                "command": "serviceFabric.publish",
+                "title": "Publish Application…",
+                "category": "Service Fabric",
+                "icon": "$(rocket)"
+            },
+            {
+                "command": "serviceFabric.remove",
+                "title": "Remove Application",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.connectLocal",
+                "title": "Connect to Local Cluster",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.connectRemote",
+                "title": "Connect to Remote Cluster…",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.disconnect",
+                "title": "Disconnect",
+                "category": "Service Fabric",
+                "icon": "$(debug-disconnect)"
+            },
+            {
+                "command": "serviceFabric.cluster.selectActive",
+                "title": "Select Active Cluster",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.startLocal",
+                "title": "Start Local Cluster",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.stopLocal",
+                "title": "Stop Local Cluster",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.resetLocal",
+                "title": "Reset Local Cluster",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.switchLocalMode",
+                "title": "Switch Local Cluster Mode (1-node ↔ 5-node)…",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.openExplorer",
+                "title": "Open Service Fabric Explorer",
+                "category": "Service Fabric",
+                "icon": "$(globe)"
+            },
+            {
+                "command": "serviceFabric.createApplication",
+                "title": "Create New Application…",
+                "category": "Service Fabric",
+                "icon": "$(add)"
+            },
+            {
+                "command": "serviceFabric.addService",
+                "title": "Add New Service…",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.removeService",
+                "title": "Remove Service…",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.addLibrary",
+                "title": "Add Library Project…",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.removeLibrary",
+                "title": "Remove Library Project…",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.debug.attachToService",
+                "title": "Attach Debugger to Deployed Service…",
+                "category": "Service Fabric",
+                "icon": "$(debug-alt)"
+            },
+            {
+                "command": "serviceFabric.debug.autoAttachNext",
+                "title": "Auto-attach Debugger Next Deploy",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.devCert.trust",
+                "title": "Trust ASP.NET Core Dev Certificate",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.diagnostics.showEvents",
+                "title": "Show Diagnostic Events",
+                "category": "Service Fabric",
+                "icon": "$(graph-line)"
+            },
+            {
+                "command": "serviceFabric.openWalkthrough",
+                "title": "Get Started",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.openHelp",
+                "title": "Open Help Guide",
+                "category": "Service Fabric",
+                "icon": "$(book)"
+            },
+            {
+                "command": "serviceFabric.resetTier2Prompt",
+                "title": "Reset Tier 2 Property-Evaluator Prompt (legacy cleanup)",
+                "category": "Service Fabric"
+            }
+        ],
+        "menus": {
+            "view/title": [
+                {
+                    "command": "serviceFabric.refreshApplications",
+                    "when": "view == serviceFabric.applications",
+                    "group": "navigation"
+                },
+                {
+                    "command": "serviceFabric.createApplication",
+                    "when": "view == serviceFabric.applications",
+                    "group": "navigation"
+                },
+                {
+                    "command": "serviceFabric.refreshClusters",
+                    "when": "view == serviceFabric.clusters",
+                    "group": "navigation"
+                },
+                {
+                    "command": "serviceFabric.openHelp",
+                    "when": "view == serviceFabric.applications",
+                    "group": "navigation@9"
+                },
+                {
+                    "command": "serviceFabric.openHelp",
+                    "when": "view == serviceFabric.clusters",
+                    "group": "navigation@9"
+                }
+            ],
+            "view/item/context": [
+                {
+                    "command": "serviceFabric.restore",
+                    "when": "view == serviceFabric.applications && viewItem == sfproj",
+                    "group": "1_build@0"
+                },
+                {
+                    "command": "serviceFabric.build",
+                    "when": "view == serviceFabric.applications && viewItem == sfproj",
+                    "group": "1_build@1"
+                },
+                {
+                    "command": "serviceFabric.rebuild",
+                    "when": "view == serviceFabric.applications && viewItem == sfproj",
+                    "group": "1_build@2"
+                },
+                {
+                    "command": "serviceFabric.clean",
+                    "when": "view == serviceFabric.applications && viewItem == sfproj",
+                    "group": "1_build@3"
+                },
+                {
+                    "command": "serviceFabric.package",
+                    "when": "view == serviceFabric.applications && viewItem == sfproj",
+                    "group": "2_package@1"
+                },
+                {
+                    "command": "serviceFabric.publish",
+                    "when": "view == serviceFabric.applications && viewItem == sfproj",
+                    "group": "3_deploy@1"
+                },
+                {
+                    "command": "serviceFabric.remove",
+                    "when": "view == serviceFabric.applications && viewItem == sfproj",
+                    "group": "3_deploy@2"
+                },
+                {
+                    "command": "serviceFabric.addService",
+                    "when": "view == serviceFabric.applications && viewItem == sfproj",
+                    "group": "9_modify@1"
+                },
+                {
+                    "command": "serviceFabric.addLibrary",
+                    "when": "view == serviceFabric.applications && viewItem == sfproj",
+                    "group": "9_modify@1.5"
+                },
+                {
+                    "command": "serviceFabric.removeLibrary",
+                    "when": "view == serviceFabric.applications && viewItem == sfproj",
+                    "group": "9_modify@1.6"
+                },
+                {
+                    "command": "serviceFabric.removeService",
+                    "when": "view == serviceFabric.applications && viewItem == sfproj",
+                    "group": "9_modify@2"
+                },
+                {
+                    "command": "serviceFabric.cluster.disconnect",
+                    "when": "view == serviceFabric.clusters && viewItem == cluster.connected",
+                    "group": "inline"
+                },
+                {
+                    "command": "serviceFabric.cluster.openExplorer",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\./",
+                    "group": "1_navigate@1"
+                },
+                {
+                    "command": "serviceFabric.debug.attachToService",
+                    "when": "view == serviceFabric.clusters && viewItem == cluster.app",
+                    "group": "1_navigate@2"
+                },
+                {
+                    "command": "serviceFabric.debug.autoAttachNext",
+                    "when": "view == serviceFabric.clusters && viewItem == cluster.app",
+                    "group": "1_navigate@3"
+                },
+                {
+                    "command": "serviceFabric.diagnostics.showEvents",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\./",
+                    "group": "2_inspect@1"
+                }
+            ],
+            "explorer/context": [
+                {
+                    "command": "serviceFabric.restore",
+                    "when": "resourceExtname == .sfproj",
+                    "group": "1_build@0"
+                },
+                {
+                    "command": "serviceFabric.package",
+                    "when": "resourceExtname == .sfproj",
+                    "group": "2_package@1"
+                },
+                {
+                    "command": "serviceFabric.publish",
+                    "when": "resourceExtname == .sfproj",
+                    "group": "3_deploy@1"
+                },
+                {
+                    "command": "serviceFabric.addService",
+                    "when": "resourceExtname == .sfproj",
+                    "group": "9_modify@1"
+                },
+                {
+                    "command": "serviceFabric.addLibrary",
+                    "when": "resourceExtname == .sfproj",
+                    "group": "9_modify@1.5"
+                },
+                {
+                    "command": "serviceFabric.removeLibrary",
+                    "when": "resourceExtname == .sfproj",
+                    "group": "9_modify@1.6"
+                },
+                {
+                    "command": "serviceFabric.removeService",
+                    "when": "resourceExtname == .sfproj",
+                    "group": "9_modify@2"
+                },
+                {
+                    "command": "serviceFabric.addLibrary",
+                    "when": "resourceExtname == .csproj",
+                    "group": "9_modify@1.5"
+                },
+                {
+                    "command": "serviceFabric.removeLibrary",
+                    "when": "resourceExtname == .csproj",
+                    "group": "9_modify@1.6"
+                }
+            ],
+            "commandPalette": [
+                {
+                    "command": "serviceFabric.openFile",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.refreshApplications",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.refreshClusters",
+                    "when": "false"
+                }
+            ]
+        },
+        "taskDefinitions": [
+            {
+                "type": "servicefabric",
+                "required": [
+                    "project",
+                    "target"
+                ],
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Workspace-relative path to the .sfproj file."
+                    },
+                    "target": {
+                        "type": "string",
+                        "enum": [
+                            "Build",
+                            "Rebuild",
+                            "Clean",
+                            "Package"
+                        ],
+                        "description": "MSBuild target to invoke."
+                    },
+                    "configuration": {
+                        "type": "string",
+                        "default": "Debug"
+                    },
+                    "platform": {
+                        "type": "string",
+                        "default": "x64"
+                    }
+                }
+            }
+        ],
+        "configuration": {
+            "title": "Service Fabric",
+            "properties": {
+                "serviceFabric.msbuildPath": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Override path to MSBuild.exe. If empty, the extension auto-detects via vswhere or falls back to 'dotnet msbuild'."
+                },
+                "serviceFabric.nugetPath": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Optional override for the NuGet executable used by 'Service Fabric: Restore NuGet Packages'. Leave empty to auto-detect via Visual Studio Installer or PATH."
+                },
+                "serviceFabric.scaffoldAutoRestore": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "When true, automatically run NuGet restore after Create Application / Add Service so the project is immediately buildable. Disable in offline/sandboxed environments."
+                },
+                "serviceFabric.scaffold.suppressDevCertPrompt": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "When true, suppress the post-scaffold prompt to trust the ASP.NET Core HTTPS development certificate after Add New Service. The standalone 'Service Fabric: Trust ASP.NET Core Dev Certificate' command is still available."
+                },
+                "serviceFabric.devCert.expirationWarningDays": {
+                    "type": "number",
+                    "default": 30,
+                    "minimum": 0,
+                    "maximum": 365,
+                    "description": "Number of days before expiration when 'Service Fabric: Trust ASP.NET Core Dev Certificate' should warn that the cert is expiring soon. Set to 0 to disable expiry warnings."
+                },
+                "serviceFabric.debug.suppressInstallPrompt": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "When true, skip the pre-flight check that prompts to install the C# extension before attaching to a deployed service. Use in CI / sandboxed environments where the prompt is not desired."
+                },
+                "serviceFabric.debug.autoAttachOnPublish": {
+                    "type": "string",
+                    "enum": [
+                        "never",
+                        "localOnly"
+                    ],
+                    "enumDescriptions": [
+                        "Never auto-attach the debugger after Publish. The first successful Publish surfaces a one-time prompt offering to enable this; afterwards the prompt is silenced.",
+                        "Auto-attach after every successful Publish to a local cluster. Remote-cluster Publishes are unaffected."
+                    ],
+                    "default": "never",
+                    "description": "Whether to automatically attach the debugger after a successful Publish. 'localOnly' only fires when the active cluster is the local dev cluster."
+                },
+                "serviceFabric.debug.autoAttachMaxSessions": {
+                    "type": "number",
+                    "default": 5,
+                    "minimum": 1,
+                    "maximum": 50,
+                    "description": "Maximum number of debug sessions auto-attach will start in a single Publish. Excess host processes are skipped (the toast reports how many)."
+                },
+                "serviceFabric.debug.autoAttachReadyTimeoutSec": {
+                    "type": "number",
+                    "default": 30,
+                    "minimum": 5,
+                    "maximum": 300,
+                    "description": "Seconds auto-attach will wait for at least one service replica to reach the Ready state before giving up."
+                },
+                "serviceFabric.sdkPath": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Override path to the Service Fabric SDK installation root (the folder containing Tools\\PSModule\\ServiceFabricSDK)."
+                },
+                "serviceFabric.powerShell.executable": {
+                    "type": "string",
+                    "default": "auto",
+                    "enum": [
+                        "auto",
+                        "pwsh",
+                        "powershell"
+                    ],
+                    "description": "Which PowerShell host to use. 'auto' prefers Windows PowerShell on Windows (required by SF SDK), pwsh elsewhere."
+                },
+                "serviceFabric.confirmDestructiveActions": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Prompt before Remove / Reset Local Cluster operations."
+                },
+                "serviceFabric.tree.showDeploymentStatus": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Poll the active cluster to badge applications that are currently deployed."
+                },
+                "serviceFabric.diagnostics.enableManifestRules": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Enable in-house diagnostics for application/service manifests (parameter usage, version drift, etc.)."
+                },
+                "serviceFabric.deploy.packagePath": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Override the application package path passed to Deploy-FabricApplication.ps1. Useful when MSBuild outputs the package somewhere other than the project's <OutputPath>/<PackageLocation> and the standard 'pkg\\<Configuration>\\' location — e.g. monorepo drops to a sibling folder. Accepts an absolute path or a path relative to the .sfproj directory. The resolver looks for ApplicationManifest.xml directly under this path, and (bounded by serviceFabric.deploy.searchMaxDepth) under nested subdirectories. MSBuild property references ($(MSBuildProjectName), $(Configuration), etc.) are expanded against the .sfproj's <PropertyGroup> values. When this setting resolves to a package whose ApplicationTypeName does not match the project's declared type, a modal warning prompts before deploy (not persisted). Leave empty to auto-detect."
+                },
+                "serviceFabric.deploy.useMsbuildPropertyEvaluator": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "When true, fall back to invoking MSBuild.exe -getProperty: to resolve <OutputPath>/<PackageLocation> values that reference properties defined in imported targets (e.g. Microsoft.ServiceFabric.targets, Directory.Build.props). The in-extension expander handles all properties declared in the .sfproj's own <PropertyGroup> blocks; enable this only when your build relies on imported-property expansion. Adds 1–3 s per Publish on cold cache."
+                },
+                "serviceFabric.deploy.suppressMsbuildEvaluatorPrompt": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Skip the modal prompt that offers to enable serviceFabric.deploy.useMsbuildPropertyEvaluator when Tier 1 expansion leaves unresolved MSBuild properties (e.g. $(BuildOutputPath) defined in Directory.Build.props). Power users and CI configurations can set this to true to keep Publish behavior strictly governed by useMsbuildPropertyEvaluator. Does not affect projects whose Tier 1 expansion resolves every token."
+                },
+                "serviceFabric.deploy.searchMaxDepth": {
+                    "type": "integer",
+                    "default": 2,
+                    "minimum": 1,
+                    "maximum": 16,
+                    "description": "Maximum directory depth for the per-candidate ApplicationManifest.xml search applied to each declared package-root candidate (serviceFabric.deploy.packagePath, <PackageLocation>, <OutputPath>, pkg\\<Configuration>\\, ...). Default 2 covers the depth-0 direct, depth-1 immediate-child, and depth-2 nested-Pkg layouts produced by the SDK templates and common monorepo conventions; increase for deep monorepo drops (e.g. <repo>\\artifacts\\bin\\<App>\\<cfg>\\sfpkg\\<AppType>\\). Values outside [1, 16] fall back to the default and emit a warning."
+                },
+                "serviceFabric.deploy.promptForApplicationParameters": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "When true, Publish Application asks which ApplicationParameters\\<env>.xml to splat over the publish profile's defaults. When false (default), Publish reads the file paired with the publish profile via its <ApplicationParameterFile Path=\"...\" /> element — so a 5-node publish profile automatically uses the 5-node parameter file. Enable this only when you need to mix-and-match (advanced)."
+                },
+                "serviceFabric.remove.waitSeconds": {
+                    "type": "number",
+                    "default": 30,
+                    "minimum": 0,
+                    "description": "Maximum seconds to wait for the cluster to finish tearing down application instances of a type before unregistering it. Remove-ServiceFabricApplication is async — unregistering too soon produces 'Application type and version is still in use'. Set to 0 to skip the wait (and accept the unregister may fail)."
+                },
+                "serviceFabric.xmlSchemaPath": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Override path to the Service Fabric XSDs. Accepts either a folder containing 'ServiceFabricServiceModel.xsd' or a direct path to the .xsd file. When empty the extension probes the standard SDK install locations (e.g. 'C:\\Program Files\\Microsoft SDKs\\Service Fabric\\schemas')."
+                },
+                "serviceFabric.logLevel": {
+                    "type": "string",
+                    "default": "info",
+                    "enum": [
+                        "error",
+                        "warn",
+                        "info",
+                        "debug"
+                    ],
+                    "description": "Verbosity of the Service Fabric output channel."
+                },
+                "serviceFabric.localCluster.endpoint": {
+                    "type": "string",
+                    "default": "http://localhost:19080",
+                    "description": "HTTP gateway endpoint of the local development cluster."
+                },
+                "serviceFabric.localCluster.nodeCount": {
+                    "type": "string",
+                    "default": "5",
+                    "enum": [
+                        "1",
+                        "5"
+                    ],
+                    "enumDescriptions": [
+                        "One-node dev cluster — fastest startup, no failover testing.",
+                        "Five-node test cluster — supports placement constraints, failover, and rolling upgrades."
+                    ],
+                    "description": "Default node count for the local Service Fabric dev cluster. Used by 'Start Local Cluster' / 'Reset Local Cluster' when no explicit choice is made."
+                },
+                "serviceFabric.telemetry.enabled": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Opt in to local-only telemetry events (logged to the Service Fabric output channel at debug verbosity). No data leaves the machine. VS Code's global 'telemetry.telemetryLevel' is also honored."
+                }
+            }
+        },
+        "configurationDefaults": {
+            "[xml]": {
+                "editor.suggest.snippetsPreventQuickSuggestions": false
+            }
+        },
+        "xmlLanguageParticipants": [
+            {
+                "languageId": "sfproj"
+            }
+        ],
+        "debuggers": [
+            {
+                "type": "servicefabric",
+                "label": "Service Fabric: Attach to Deployed Service",
+                "languages": [
+                    "csharp",
+                    "fsharp"
+                ],
+                "configurationAttributes": {
+                    "attach": {
+                        "properties": {
+                            "runtime": {
+                                "type": "string",
+                                "enum": [
+                                    "coreclr",
+                                    "clr"
+                                ],
+                                "default": "coreclr",
+                                "description": "Runtime of the target service host process."
+                            }
+                        }
+                    }
+                },
+                "initialConfigurations": [
+                    {
+                        "type": "servicefabric",
+                        "request": "attach",
+                        "name": "Service Fabric: Attach to Deployed Service",
+                        "runtime": "coreclr"
+                    }
+                ],
+                "configurationSnippets": [
+                    {
+                        "label": "Service Fabric: Attach to Deployed Service (.NET / coreclr)",
+                        "description": "Picks an application and code package on the active Service Fabric cluster, then attaches the .NET debugger to the host process.",
+                        "body": {
+                            "type": "servicefabric",
+                            "request": "attach",
+                            "name": "Service Fabric: Attach (coreclr)",
+                            "runtime": "coreclr"
+                        }
+                    },
+                    {
+                        "label": "Service Fabric: Attach to Deployed Service (.NET Framework / clr)",
+                        "description": "Picks an application and code package and attaches the legacy CLR debugger to the host process. Windows-only.",
+                        "body": {
+                            "type": "servicefabric",
+                            "request": "attach",
+                            "name": "Service Fabric: Attach (clr)",
+                            "runtime": "clr"
+                        }
+                    }
+                ]
+            }
+        ],
+        "walkthroughs": [
+            {
+                "id": "serviceFabric.gettingStarted",
+                "title": "Get Started with Service Fabric Tools",
+                "description": "Open a Service Fabric application, build it, deploy to a local cluster, and attach the debugger.",
+                "steps": [
+                    {
+                        "id": "openProject",
+                        "title": "Open a Service Fabric application",
+                        "description": "Open a folder that contains a `.sfproj` file. The extension activates automatically and the **Service Fabric** view appears in the activity bar.\n[Open Folder](command:vscode.openFolder)",
+                        "media": {
+                            "markdown": "media/walkthrough/open-project.md"
+                        },
+                        "completionEvents": [
+                            "onContext:serviceFabric.hasProject"
+                        ]
+                    },
+                    {
+                        "id": "startCluster",
+                        "title": "Start a local development cluster",
+                        "description": "Run **Service Fabric: Start Local Cluster**. Choose 1-node for fast iteration or 5-node to test failover and placement.\n[Start Local Cluster](command:serviceFabric.cluster.startLocal)",
+                        "media": {
+                            "markdown": "media/walkthrough/start-cluster.md"
+                        }
+                    },
+                    {
+                        "id": "buildAndDeploy",
+                        "title": "Build, package, and deploy",
+                        "description": "Right-click the `.sfproj` in the **Applications** view and pick **Package**, then **Publish Application…**. Output streams to the **Service Fabric** output channel.",
+                        "media": {
+                            "markdown": "media/walkthrough/build-deploy.md"
+                        }
+                    },
+                    {
+                        "id": "attachDebugger",
+                        "title": "Attach the debugger to a running service",
+                        "description": "Once your application is deployed, run **Service Fabric: Attach Debugger to Deployed Service…** to pick a code package and start a debug session against the host process.\n[Attach Debugger](command:serviceFabric.debug.attachToService)",
+                        "media": {
+                            "markdown": "media/walkthrough/attach-debugger.md"
+                        }
+                    },
+                    {
+                        "id": "openHelp",
+                        "title": "Read the full how-to guide",
+                        "description": "The bundled how-to guide covers every feature: tree, manifests, build, local cluster, deploy, debug, diagnostics, settings, and troubleshooting.\n[Open Help Guide](command:serviceFabric.openHelp)",
+                        "media": {
+                            "markdown": "media/walkthrough/help.md"
+                        }
+                    }
+                ]
+            }
+        ]
+    },
+    "scripts": {
+        "vscode:prepublish": "npm run build:prod",
+        "build": "node esbuild.config.mjs",
+        "build:prod": "node esbuild.config.mjs --production",
+        "watch": "node esbuild.config.mjs --watch",
+        "typecheck": "tsc --noEmit",
+        "lint": "eslint .",
+        "test:unit": "node ./scripts/run-tests.mjs",
+        "test": "npm run typecheck && npm run lint && npm run test:unit",
+        "package": "vsce package --no-dependencies --out artifacts/",
+        "release": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/release.ps1"
+    },
+    "devDependencies": {
+        "@types/node": "^20.11.0",
+        "@types/vscode": "^1.90.0",
+        "@vscode/vsce": "^3.9.1",
+        "esbuild": "^0.20.2",
+        "eslint": "^9.0.0",
+        "tsx": "^4.7.0",
+        "typescript": "^5.4.0",
+        "typescript-eslint": "^8.0.0"
+    },
+    "dependencies": {
+        "fast-xml-parser": "^4.3.6"
+    }
+}
