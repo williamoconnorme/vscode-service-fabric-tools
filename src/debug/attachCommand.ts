@@ -25,6 +25,8 @@ export interface DebugAttachLogger {
 export interface AttachToServiceArgs {
 	connection?: ClusterConnection;
 	appName?: string;
+	/** Set when invoked on a code package in the Clusters tree: skips the package picker when it matches. */
+	entity?: { nodeName?: string; serviceManifestName?: string; codePackageName?: string };
 }
 
 /** Interval between `vscode.extensions.getExtension` polls after an install. */
@@ -87,7 +89,16 @@ export async function attachToDeployedService(
 		);
 		return;
 	}
-	const pkg = await pickCodePackage(packages);
+	const wanted = args?.entity;
+	const preselected =
+		wanted?.codePackageName &&
+		packages.find(
+			(p) =>
+				p.nodeName === wanted.nodeName &&
+				p.serviceManifestName === wanted.serviceManifestName &&
+				p.codePackageName === wanted.codePackageName,
+		);
+	const pkg = preselected || (await pickCodePackage(packages));
 	if (!pkg) return;
 	const runtime = await pickAttachRuntime();
 	if (!runtime || !(await ensureDebuggerAvailable(runtime, logger))) return;

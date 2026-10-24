@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+Clusters view mirrors Service Fabric Explorer.
+
+- **Full entity tree.** A connected cluster now expands to **Application Types** (one child per provisioned version), **Applications** (application → service → partition → replica/instance), **Nodes** (node → deployed application → service package → **Code Packages** / **Replicas**) **System** (`fabric:/System` services) and **Repair Jobs** (Repair Manager tasks with state, action, target nodes and result; the group says so when the cluster has no RepairManager add-on). Every level is fetched from the gateway on expand, icons are coloured by health state, and rows describe status, kind, role and placement. Groups and entities have an inline **Refresh**; **Refresh Clusters** re-probes every saved connection.
+- **Right-click actions per entity.** Show Details / Show Health (gateway JSON in a read-only editor), Show Cluster Manifest, Copy Name, Unprovision Application Type…, Delete Application…, Delete Service…, Scale Service…, Reset Partition Load, Recover Partition from Quorum Loss…, Restart Replica, Remove Replica / Instance…, Activate / Deactivate / Restart Node, Remove Node State…, Restart Code Package…, Show Container Logs…, Cancel / Force Approve / Delete Repair Task…. Data-losing actions always confirm; restarts and load resets honour `serviceFabric.confirmDestructiveActions`.
+- **View filter and sort.** A **Filter** menu on the Clusters view (with a multi-select **Filter and Sort…** picker) hides healthy, warning or unhealthy rows and completed repair jobs, and can sort every list by health (Error → Warning → Ok); hidden rows collapse into a clickable `N hidden by filter` note and the active filter is shown next to the view title. Persisted per workspace.
+- **Open in Service Fabric Explorer** (renamed from *Open Service Fabric Explorer*) deep-links to the right-clicked application, service, partition, replica, node or code package.
+- **Attach Debugger to Deployed Service…** is also offered on code packages with a known PID and skips the package picker.
+- **`SfRestClient`** gains POST support with `FabricError` parsing (`SfGatewayError`) and typed wrappers for the application-type, application, service, partition, replica, node, deployed-entity and repair-task REST APIs (`api-version` 6.0, container logs 6.2, cluster version 6.4).
+
 ## 1.1.11
 
 Removes the project-wide recursive `ApplicationManifest.xml` search. Generalizes the per-candidate scan from depth-1 to depth-N (governed by `serviceFabric.deploy.searchMaxDepth`) so every declared candidate — not just `serviceFabric.deploy.packagePath` — supports deep monorepo layouts.

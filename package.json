@@ -188,7 +188,7 @@
             },
             {
                 "command": "serviceFabric.cluster.openExplorer",
-                "title": "Open Service Fabric Explorer",
+                "title": "Open in Service Fabric Explorer",
                 "category": "Service Fabric",
                 "icon": "$(globe)"
             },
@@ -255,6 +255,179 @@
                 "command": "serviceFabric.resetTier2Prompt",
                 "title": "Reset Tier 2 Property-Evaluator Prompt (legacy cleanup)",
                 "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.refreshNode",
+                "title": "Refresh",
+                "category": "Service Fabric",
+                "icon": "$(refresh)"
+            },
+            {
+                "command": "serviceFabric.cluster.showDetails",
+                "title": "Show Details",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.showHealth",
+                "title": "Show Health",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.showManifest",
+                "title": "Show Cluster Manifest",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.copyName",
+                "title": "Copy Name",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.unprovisionType",
+                "title": "Unprovision Application Type…",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.deleteApplication",
+                "title": "Delete Application…",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.deleteService",
+                "title": "Delete Service…",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.scaleService",
+                "title": "Scale Service…",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.resetPartitionLoad",
+                "title": "Reset Partition Load",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.recoverPartition",
+                "title": "Recover Partition from Quorum Loss…",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.restartReplica",
+                "title": "Restart Replica",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.removeReplica",
+                "title": "Remove Replica / Instance…",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.activateNode",
+                "title": "Activate Node",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.deactivateNode",
+                "title": "Deactivate Node…",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.restartNode",
+                "title": "Restart Node…",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.removeNodeState",
+                "title": "Remove Node State…",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.restartCodePackage",
+                "title": "Restart Code Package…",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.showContainerLogs",
+                "title": "Show Container Logs…",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.cancelRepairTask",
+                "title": "Cancel Repair Task…",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.forceApproveRepairTask",
+                "title": "Force Approve Repair Task…",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.deleteRepairTask",
+                "title": "Delete Repair Task…",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.filter.hideOk",
+                "title": "Clusters View: Hide Healthy",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.filter.showOk",
+                "title": "Clusters View: Show Healthy",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.filter.hideWarning",
+                "title": "Clusters View: Hide Warning",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.filter.showWarning",
+                "title": "Clusters View: Show Warning",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.filter.hideError",
+                "title": "Clusters View: Hide Unhealthy",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.filter.showError",
+                "title": "Clusters View: Show Unhealthy",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.filter.hideCompletedRepairs",
+                "title": "Clusters View: Hide Completed Repair Jobs",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.filter.showCompletedRepairs",
+                "title": "Clusters View: Show Completed Repair Jobs",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.filter.clear",
+                "title": "Clusters View: Clear Filters",
+                "category": "Service Fabric",
+                "icon": "$(clear-all)"
+            },
+            {
+                "command": "serviceFabric.cluster.filter.pick",
+                "title": "Clusters View: Filter and Sort…",
+                "category": "Service Fabric",
+                "icon": "$(filter)"
+            },
+            {
+                "command": "serviceFabric.cluster.filter.sortByHealth",
+                "title": "Clusters View: Sort by Health (Unhealthy First)",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.cluster.filter.sortDefault",
+                "title": "Clusters View: Sort by Default Order",
+                "category": "Service Fabric"
             }
         ],
         "menus": {
@@ -283,6 +456,11 @@
                     "command": "serviceFabric.openHelp",
                     "when": "view == serviceFabric.clusters",
                     "group": "navigation@9"
+                },
+                {
+                    "submenu": "serviceFabric.clusters.filter",
+                    "when": "view == serviceFabric.clusters",
+                    "group": "navigation@2"
                 }
             ],
             "view/item/context": [
@@ -347,8 +525,13 @@
                     "group": "inline"
                 },
                 {
+                    "command": "serviceFabric.cluster.refreshNode",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.(connected|disconnected|group\\.|appType$|app$|service\\.|partition\\.|node\\.|deployedApp$|deployedServicePackage$)/",
+                    "group": "inline"
+                },
+                {
                     "command": "serviceFabric.cluster.openExplorer",
-                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\./",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.(?!message)/",
                     "group": "1_navigate@1"
                 },
                 {
@@ -357,14 +540,124 @@
                     "group": "1_navigate@2"
                 },
                 {
+                    "command": "serviceFabric.debug.attachToService",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.codePackage.*\\.pid/",
+                    "group": "1_navigate@2"
+                },
+                {
                     "command": "serviceFabric.debug.autoAttachNext",
                     "when": "view == serviceFabric.clusters && viewItem == cluster.app",
                     "group": "1_navigate@3"
                 },
                 {
-                    "command": "serviceFabric.diagnostics.showEvents",
-                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\./",
+                    "command": "serviceFabric.cluster.showDetails",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.(?!message|disconnected|group\\.)/",
                     "group": "2_inspect@1"
+                },
+                {
+                    "command": "serviceFabric.cluster.showHealth",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.(connected|app|service\\.|partition\\.|replica\\.|node\\.|deployedApp|deployedServicePackage|deployedReplica\\.)/",
+                    "group": "2_inspect@2"
+                },
+                {
+                    "command": "serviceFabric.cluster.showManifest",
+                    "when": "view == serviceFabric.clusters && viewItem == cluster.connected",
+                    "group": "2_inspect@3"
+                },
+                {
+                    "command": "serviceFabric.diagnostics.showEvents",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.(connected|disconnected)$/",
+                    "group": "2_inspect@4"
+                },
+                {
+                    "command": "serviceFabric.cluster.showContainerLogs",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.codePackage\\.container/",
+                    "group": "2_inspect@5"
+                },
+                {
+                    "command": "serviceFabric.cluster.copyName",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.(?!message|group\\.)/",
+                    "group": "2_inspect@9"
+                },
+                {
+                    "command": "serviceFabric.cluster.scaleService",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.service\\.(stateful|stateless)$/",
+                    "group": "3_manage@1"
+                },
+                {
+                    "command": "serviceFabric.cluster.activateNode",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.node\\.(disabled|disabling|enabling)$/",
+                    "group": "3_manage@1"
+                },
+                {
+                    "command": "serviceFabric.cluster.deactivateNode",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.node\\.(up|disabling)$/",
+                    "group": "3_manage@2"
+                },
+                {
+                    "command": "serviceFabric.cluster.restartNode",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.node\\.(up|disabled|disabling|enabling)$/",
+                    "group": "3_manage@3"
+                },
+                {
+                    "command": "serviceFabric.cluster.restartReplica",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.(replica|deployedReplica)\\.stateful$/",
+                    "group": "3_manage@1"
+                },
+                {
+                    "command": "serviceFabric.cluster.restartCodePackage",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.codePackage/",
+                    "group": "3_manage@1"
+                },
+                {
+                    "command": "serviceFabric.cluster.resetPartitionLoad",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.partition\\./",
+                    "group": "3_manage@1"
+                },
+                {
+                    "command": "serviceFabric.cluster.unprovisionType",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.appType(Version)?$/",
+                    "group": "4_destructive@1"
+                },
+                {
+                    "command": "serviceFabric.cluster.deleteApplication",
+                    "when": "view == serviceFabric.clusters && viewItem == cluster.app",
+                    "group": "4_destructive@1"
+                },
+                {
+                    "command": "serviceFabric.cluster.deleteService",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.service\\.(stateful|stateless)$/",
+                    "group": "4_destructive@1"
+                },
+                {
+                    "command": "serviceFabric.cluster.recoverPartition",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.partition\\.stateful$/",
+                    "group": "4_destructive@1"
+                },
+                {
+                    "command": "serviceFabric.cluster.removeReplica",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.(replica|deployedReplica)\\.(stateful|stateless)$/",
+                    "group": "4_destructive@1"
+                },
+                {
+                    "command": "serviceFabric.cluster.removeNodeState",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.node\\.(down|disabled|unknown|removed)$/",
+                    "group": "4_destructive@1"
+                },
+                {
+                    "command": "serviceFabric.cluster.forceApproveRepairTask",
+                    "when": "view == serviceFabric.clusters && viewItem == cluster.repairTask.preparing",
+                    "group": "3_manage@1"
+                },
+                {
+                    "command": "serviceFabric.cluster.cancelRepairTask",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.repairTask\\.(created|claimed|preparing|approved|executing)$/",
+                    "group": "4_destructive@1"
+                },
+                {
+                    "command": "serviceFabric.cluster.deleteRepairTask",
+                    "when": "view == serviceFabric.clusters && viewItem == cluster.repairTask.completed",
+                    "group": "4_destructive@2"
                 }
             ],
             "explorer/context": [
@@ -426,6 +719,199 @@
                 {
                     "command": "serviceFabric.refreshClusters",
                     "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.refreshNode",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.showDetails",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.showHealth",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.showManifest",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.copyName",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.unprovisionType",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.deleteApplication",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.deleteService",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.scaleService",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.resetPartitionLoad",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.recoverPartition",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.restartReplica",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.removeReplica",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.activateNode",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.deactivateNode",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.restartNode",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.removeNodeState",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.restartCodePackage",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.showContainerLogs",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.cancelRepairTask",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.forceApproveRepairTask",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.deleteRepairTask",
+                    "when": "false"
+                },
+                {
+                    "command": "serviceFabric.cluster.filter.hideOk",
+                    "when": "!serviceFabric.clusters.hideOk"
+                },
+                {
+                    "command": "serviceFabric.cluster.filter.showOk",
+                    "when": "serviceFabric.clusters.hideOk"
+                },
+                {
+                    "command": "serviceFabric.cluster.filter.hideWarning",
+                    "when": "!serviceFabric.clusters.hideWarning"
+                },
+                {
+                    "command": "serviceFabric.cluster.filter.showWarning",
+                    "when": "serviceFabric.clusters.hideWarning"
+                },
+                {
+                    "command": "serviceFabric.cluster.filter.hideError",
+                    "when": "!serviceFabric.clusters.hideError"
+                },
+                {
+                    "command": "serviceFabric.cluster.filter.showError",
+                    "when": "serviceFabric.clusters.hideError"
+                },
+                {
+                    "command": "serviceFabric.cluster.filter.hideCompletedRepairs",
+                    "when": "!serviceFabric.clusters.hideCompletedRepairs"
+                },
+                {
+                    "command": "serviceFabric.cluster.filter.showCompletedRepairs",
+                    "when": "serviceFabric.clusters.hideCompletedRepairs"
+                },
+                {
+                    "command": "serviceFabric.cluster.filter.clear",
+                    "when": "serviceFabric.clusters.filtered"
+                },
+                {
+                    "command": "serviceFabric.cluster.filter.sortByHealth",
+                    "when": "!serviceFabric.clusters.sortByHealth"
+                },
+                {
+                    "command": "serviceFabric.cluster.filter.sortDefault",
+                    "when": "serviceFabric.clusters.sortByHealth"
+                }
+            ],
+            "serviceFabric.clusters.filter": [
+                {
+                    "command": "serviceFabric.cluster.filter.pick",
+                    "group": "0_pick@1"
+                },
+                {
+                    "command": "serviceFabric.cluster.filter.hideOk",
+                    "when": "!serviceFabric.clusters.hideOk",
+                    "group": "1_toggle@1"
+                },
+                {
+                    "command": "serviceFabric.cluster.filter.showOk",
+                    "when": "serviceFabric.clusters.hideOk",
+                    "group": "1_toggle@1"
+                },
+                {
+                    "command": "serviceFabric.cluster.filter.hideWarning",
+                    "when": "!serviceFabric.clusters.hideWarning",
+                    "group": "1_toggle@2"
+                },
+                {
+                    "command": "serviceFabric.cluster.filter.showWarning",
+                    "when": "serviceFabric.clusters.hideWarning",
+                    "group": "1_toggle@2"
+                },
+                {
+                    "command": "serviceFabric.cluster.filter.hideError",
+                    "when": "!serviceFabric.clusters.hideError",
+                    "group": "1_toggle@3"
+                },
+                {
+                    "command": "serviceFabric.cluster.filter.showError",
+                    "when": "serviceFabric.clusters.hideError",
+                    "group": "1_toggle@3"
+                },
+                {
+                    "command": "serviceFabric.cluster.filter.hideCompletedRepairs",
+                    "when": "!serviceFabric.clusters.hideCompletedRepairs",
+                    "group": "1_toggle@4"
+                },
+                {
+                    "command": "serviceFabric.cluster.filter.showCompletedRepairs",
+                    "when": "serviceFabric.clusters.hideCompletedRepairs",
+                    "group": "1_toggle@4"
+                },
+                {
+                    "command": "serviceFabric.cluster.filter.clear",
+                    "when": "serviceFabric.clusters.filtered",
+                    "group": "2_clear@1"
+                },
+                {
+                    "command": "serviceFabric.cluster.filter.sortByHealth",
+                    "when": "!serviceFabric.clusters.sortByHealth",
+                    "group": "1_toggle@5"
+                },
+                {
+                    "command": "serviceFabric.cluster.filter.sortDefault",
+                    "when": "serviceFabric.clusters.sortByHealth",
+                    "group": "1_toggle@5"
                 }
             ]
         },
@@ -753,6 +1239,13 @@
                         }
                     }
                 ]
+            }
+        ],
+        "submenus": [
+            {
+                "id": "serviceFabric.clusters.filter",
+                "label": "Filter",
+                "icon": "$(filter)"
             }
         ]
     },

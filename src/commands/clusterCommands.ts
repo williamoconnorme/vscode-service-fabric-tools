@@ -4,6 +4,8 @@ import type { LocalClusterManager } from '../cluster/localCluster';
 import { configureClusterSecurity, type ClusterSecurity } from '../cluster/clusterAuth';
 import { runPowerShell } from '../cluster/powerShellRunner';
 import type { Logger } from '../util/logger';
+import type { ClusterTreeItem } from '../views/clustersTreeProvider';
+import { explorerUrlFor } from './clusterEntityCommands';
 
 /** Local dev cluster size, as stored in `serviceFabric.localCluster.nodeCount`. */
 export type LocalClusterNodeCount = '1' | '5';
@@ -210,13 +212,15 @@ export async function switchLocalClusterMode(logger: Logger): Promise<void> {
 	await vscode.workspace.getConfiguration('serviceFabric').update('localCluster.nodeCount', mode, vscode.ConfigurationTarget.Global);
 }
 
-/** `serviceFabric.cluster.openExplorer`: opens `<endpoint>/Explorer/index.html` for the given (or active) cluster. */
-export async function openClusterExplorer(store: ConnectionStore, connection?: ClusterConnection): Promise<void> {
-	const target = connection ?? store.getActive();
+/**
+ * `serviceFabric.cluster.openExplorer`: opens Service Fabric Explorer for the given (or active)
+ * cluster. Invoked on an entity in the Clusters tree, it deep-links to that entity's page.
+ */
+export async function openClusterExplorer(store: ConnectionStore, item?: ClusterTreeItem): Promise<void> {
+	const target = item?.connection ?? store.getActive();
 	if (!target) {
 		vscode.window.showInformationMessage('No active cluster.');
 		return;
 	}
-	const explorerUrl = `${target.endpoint.replace(/\/$/, '')}/Explorer/index.html`;
-	await vscode.env.openExternal(vscode.Uri.parse(explorerUrl));
+	await vscode.env.openExternal(vscode.Uri.parse(explorerUrlFor(target, item)));
 }

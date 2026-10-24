@@ -114,10 +114,38 @@ Every saved connection (local + remote) appears here, with status icons:
 | `$(error)` red | Connected, health = `Error` |
 | `$(circle-slash)` | Disconnected / unreachable |
 
-Expanding a connected cluster reveals two groups: **Nodes (N)** and **Applications (N)**.
+Expanding a connected cluster shows the same hierarchy as Service Fabric Explorer, fetched live from the gateway as you expand each level:
 
-- Right-click a cluster to **Open Service Fabric Explorer**, **Show Diagnostic Events**, or **Disconnect**.
-- Right-click a **deployed application** node to **Attach Debugger to Deployed Service…**.
+```
+Local Cluster
+├─ Application Types (N)        provisioned types → one child per version
+├─ Applications (N)             application → service → partition → replica / instance
+├─ Nodes (N)                    node → deployed application → service package → Code Packages / Replicas
+├─ System (N)                   fabric:/System services → partitions → replicas
+└─ Repair Jobs (N)              Repair Manager tasks (state, action, target nodes, result)
+```
+
+Icons are coloured by health state (green `Ok`, yellow `Warning`, red `Error`) and each row's description shows status, kind and placement (for example `Primary • Ready • _Node_2`). Hover for the full record. Groups and entities carry an inline **Refresh** button; the view's toolbar **Refresh Clusters** re-probes every saved connection.
+
+**Filtering and sorting.** The funnel button in the view's title bar opens a **Filter** menu. **Filter and Sort…** opens a multi-select picker with every option; the individual toggles **Hide Healthy**, **Hide Warning**, **Hide Unhealthy** (health `Error`), **Hide Completed Repair Jobs** and **Sort by Health (Unhealthy First)** can also be flipped one at a time, and **Clear Filters** resets everything. Sorting by health orders every list `Error` → `Warning` → `Ok` → rows without a health state, keeping the gateway's order within each band. Hidden rows are replaced by a single `N hidden by filter` note at the end of each list (click it to clear the filter), group counts stay unfiltered, and the active filter is shown next to the view title. Rows without a health state (application types, code packages) are never hidden. The filter is remembered per workspace. The same commands are in the palette under **Service Fabric: Clusters View: …**.
+
+Right-click menus follow the entity:
+
+| Entity | Actions |
+|---|---|
+| Cluster | **Open in Service Fabric Explorer**, **Show Details** (version, health, upgrade progress, load), **Show Health**, **Show Cluster Manifest**, **Show Diagnostic Events**, **Disconnect** |
+| Application type / version | **Show Details** (default parameters, service types), **Unprovision Application Type…** |
+| Application | **Attach Debugger to Deployed Service…**, **Auto-attach Debugger Next Deploy**, **Show Details**, **Show Health**, **Delete Application…** |
+| Service | **Show Details** (description), **Show Health**, **Scale Service…** (instance count / target replica set size), **Delete Service…** |
+| Partition | **Show Details** (load), **Show Health**, **Reset Partition Load**, **Recover Partition from Quorum Loss…** (stateful) |
+| Replica / instance | **Show Details** (host-side detail), **Show Health**, **Restart Replica** (stateful), **Remove Replica / Instance…** |
+| Node | **Show Details** (load), **Show Health**, **Activate Node** / **Deactivate Node…** (Pause / Restart / RemoveData / RemoveNode), **Restart Node…**, **Remove Node State…** (down nodes) |
+| Deployed application / service package | **Show Details**, **Show Health** |
+| Repair job | **Show Details** (full task incl. impact and history), **Cancel Repair Task…** (cancel or abort; not on completed tasks), **Force Approve Repair Task…** (Preparing tasks), **Delete Repair Task…** (completed tasks). The group reports when the cluster has no Repair Manager add-on. |
+| Code package | **Attach Debugger to Deployed Service…** (when a PID is known), **Show Details**, **Restart Code Package…**, **Show Container Logs…** (container hosts) |
+| Everything | **Copy Name** (the `fabric:/` name, partition GUID, replica id, node name…), **Open in Service Fabric Explorer** (deep-links to the same entity) |
+
+**Show Details** / **Show Health** open the gateway's JSON in a read-only editor. Destructive actions ask for confirmation first; actions that can lose data (delete, unprovision, remove replica, remove node state, recover partition, deactivate with RemoveData) always ask, while restarts and load resets honour `serviceFabric.confirmDestructiveActions`. All of this works on remote clusters too, including Microsoft Entra ID secured ones.
 
 ### 3.3 Status bar
 
@@ -239,9 +267,9 @@ The command:
 | **Reset Local Cluster** | Removes data, redeploys the cluster manifest. Prompts for confirmation by default — toggle with `serviceFabric.confirmDestructiveActions`. |
 | **Switch Local Cluster Mode (1-node ↔ 5-node)…** | Resets and recreates the cluster in the chosen mode. |
 
-### 6.3 Open Service Fabric Explorer
+### 6.3 Open in Service Fabric Explorer
 
-Right-click a cluster → **Open Service Fabric Explorer** opens the SF web UI in your default browser (`http://localhost:19080/Explorer/index.html` for local, or the saved gateway endpoint for remote).
+Right-click a cluster → **Open in Service Fabric Explorer** opens the SF web UI in your default browser (`http://localhost:19080/Explorer/index.html` for local, or the saved gateway endpoint for remote). On any other row in the **Clusters** view the same command deep-links to that application, service, partition, replica, node or code package in Explorer.
 
 ---
 
@@ -666,7 +694,7 @@ All commands live under the **Service Fabric** category in the command palette.
 |---|---|
 | Get Started | Opens the in-product walkthrough. |
 | Open Help Guide | Opens this document in a side-by-side preview. |
-| Refresh / Refresh Clusters | Re-scans the workspace / re-queries the cluster. |
+| Refresh / Refresh Clusters | Re-scans the workspace / re-probes every saved cluster connection. |
 | Build / Rebuild / Clean / Package Application | MSBuild target on the selected `.sfproj`. |
 | Publish Application… / Remove Application | Wraps the SDK deploy/remove scripts. |
 | Connect to Local Cluster / Connect to Remote Cluster… | Adds a connection. |
@@ -674,7 +702,22 @@ All commands live under the **Service Fabric** category in the command palette.
 | Select Active Cluster | Picks which connection drives deploy/attach/events. |
 | Start / Stop / Reset Local Cluster | Local SDK cluster lifecycle. |
 | Switch Local Cluster Mode (1-node ↔ 5-node)… | Reset + recreate at the chosen size. |
-| Open Service Fabric Explorer | Opens the SFX web UI in the default browser. |
+| Open in Service Fabric Explorer | Opens the SFX web UI in the default browser, deep-linked to the right-clicked entity. |
+| Refresh (Clusters view rows) | Re-fetches one group or entity and its children from the gateway. On a cluster row it re-probes the connection. |
+| Show Details / Show Health | Opens the gateway's JSON for the right-clicked cluster, application type, application, service, partition, replica, node, deployed application, service package or code package in a read-only editor. |
+| Show Cluster Manifest | Opens the cluster manifest XML. |
+| Copy Name | Copies the entity's `fabric:/` name or id. |
+| Unprovision Application Type… | `POST /ApplicationTypes/{name}/$/Unprovision` for the picked version. |
+| Delete Application… / Delete Service… | `POST …/$/Delete`, optionally with `ForceRemove`. |
+| Scale Service… | `POST /Services/{id}/$/Update` setting `InstanceCount` (stateless, `-1` = all nodes) or `TargetReplicaSetSize` (stateful). |
+| Reset Partition Load / Recover Partition from Quorum Loss… | `POST /Partitions/{id}/$/ResetLoad` / `$/Recover`. |
+| Restart Replica / Remove Replica / Instance… | `POST /Nodes/{node}/$/GetPartitions/{partition}/$/GetReplicas/{replica}/$/Restart` / `$/Delete`. |
+| Activate Node / Deactivate Node… / Restart Node… / Remove Node State… | `POST /Nodes/{node}/$/Activate` / `$/Deactivate` (Pause, Restart, RemoveData, RemoveNode) / `$/Restart` / `$/RemoveNodeState`. |
+| Restart Code Package… | `POST /Nodes/{node}/$/GetApplications/{app}/$/GetCodePackages/$/Restart` with the current entry-point instance id. |
+| Show Container Logs… | `GET …/$/GetCodePackages/$/ContainerLogs` for a containerised code package (tail or all; current or previous container). |
+| Clusters View: Filter and Sort… | Multi-select picker for all hide options plus sort-by-health. Persisted per workspace. |
+| Clusters View: Hide / Show Healthy, Warning, Unhealthy, Completed Repair Jobs; Sort by Health / Default Order; Clear Filters | Toggle one filter or sort option at a time. |
+| Cancel Repair Task… / Force Approve Repair Task… / Delete Repair Task… | `POST /$/CancelRepairTask` (optionally `RequestAbort`) / `$/ForceApproveRepairTask` / `$/DeleteRepairTask` with the task's id and version. Repair Jobs are listed from `GET /$/GetRepairTaskList`. |
 | Create New Application… | Scaffolding wizard. |
 | Add New Service… | Picker-driven scaffold for a new stateless or stateful service inside an existing `.sfproj`. Patches the application manifest and per-environment parameter files. |
 | Add Library Project… | Scaffolds a vanilla SDK-style class library next to the `.sfproj` and adds a `<ProjectReference>` to the picked consumer service csprojs. From a `.csproj` context, also offers a *Reference existing library project…* mode. See §11.4. |

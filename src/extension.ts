@@ -4,7 +4,14 @@ import { SfProjectWatcher } from './project/projectWatcher';
 import { ApplicationsTreeProvider } from './views/applicationsTreeProvider';
 import { ConnectionStore } from './cluster/connectionStore';
 import { LocalClusterManager } from './cluster/localCluster';
-import { ClustersTreeProvider, type ClusterTreeItem } from './views/clustersTreeProvider';
+import {
+	ClustersTreeProvider,
+	describeFilter,
+	EMPTY_FILTER,
+	type ClusterTreeFilter,
+	type ClusterTreeItem,
+} from './views/clustersTreeProvider';
+import { ClusterDocumentProvider } from './views/clusterDocuments';
 import { ClusterStatusBar } from './views/clusterStatusBar';
 import { Telemetry } from './util/telemetry';
 import { DiagnosticEventsPanel } from './views/diagnosticEventsPanel';
@@ -29,6 +36,7 @@ import {
 	stopLocalCluster,
 	switchLocalClusterMode,
 } from './commands/clusterCommands';
+import { clusterEntityCommands } from './commands/clusterEntityCommands';
 import { runCreateApplicationCommand } from './commands/createApplicationCommand';
 import { runAddServiceCommand } from './commands/addServiceCommand';
 import { runRemoveServiceCommand } from './commands/removeServiceCommand';
@@ -68,11 +76,59 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const connections = new ConnectionStore(context);
 	context.subscriptions.push(connections);
 	const localCluster = new LocalClusterManager(connections, logger);
-	const clustersTree = new ClustersTreeProvider(connections);
+	const clustersTree = new ClustersTreeProvider(connections, context.workspaceState);
 	const clustersView = vscode.window.createTreeView('serviceFabric.clusters', {
 		treeDataProvider: clustersTree,
 	});
 	context.subscriptions.push(clustersView);
+	// Mirror the filter into context keys (drives the Filter menu) and the view description.
+	const publishClusterFilter = (): void => {
+		const filter = clustersTree.getFilter();
+		for (const key of Object.keys(filter) as (keyof ClusterTreeFilter)[]) {
+			vscode.commands.executeCommand('setContext', `serviceFabric.clusters.${key}`, filter[key]);
+		}
+		vscode.commands.executeCommand('setContext', 'serviceFabric.clusters.filtered', Object.values(filter).some(Boolean));
+		clustersView.description = describeFilter(filter);
+	};
+	publishClusterFilter();
+	const toggleClusterFilter = (key: keyof ClusterTreeFilter) => async (): Promise<void> => {
+		await clustersTree.setFilter({ ...clustersTree.getFilter(), [key]: !clustersTree.getFilter()[key] });
+		publishClusterFilter();
+	};
+	/** Multi-select picker covering every filter and sort option at once. */
+	const pickClusterFilter = async (): Promise<void> => {
+		const current = clustersTree.getFilter();
+		const options: (vscode.QuickPickItem & { key: keyof ClusterTreeFilter })[] = [
+			{ key: 'hideOk', label: '$(pass) Hide healthy', description: 'Rows whose health is Ok, and repair jobs that succeeded' },
+			{ key: 'hideWarning', label: '$(warning) Hide warning', description: 'Rows whose health is Warning' },
+			{ key: 'hideError', label: '$(error) Hide unhealthy', description: 'Rows whose health is Error, and repair jobs that failed' },
+			{
+				key: 'hideCompletedRepairs',
+				label: '$(tools) Hide completed repair jobs',
+				description: 'Repair Manager tasks in the Completed state',
+			},
+			{
+				key: 'sortByHealth',
+				label: '$(sort-precedence) Sort by health',
+				description: 'Unhealthy first, then warning, then healthy',
+				kind: vscode.QuickPickItemKind.Default,
+			},
+		];
+		for (const option of options) option.picked = current[option.key];
+		const picked = await vscode.window.showQuickPick(options, {
+			canPickMany: true,
+			title: 'Filter and sort the Service Fabric Clusters view',
+			placeHolder: 'Select what to hide and how to order rows (none selected = show everything in gateway order)',
+		});
+		if (!picked) return;
+		const chosen = new Set(picked.map((p) => p.key));
+		const next = { ...EMPTY_FILTER };
+		for (const option of options) next[option.key] = chosen.has(option.key);
+		await clustersTree.setFilter(next);
+		publishClusterFilter();
+	};
+	const clusterDocuments = new ClusterDocumentProvider();
+	context.subscriptions.push(clusterDocuments);
 	const statusBar = new ClusterStatusBar(connections, localCluster, logger);
 	context.subscriptions.push(statusBar);
 
@@ -119,7 +175,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	const commands: [string, CommandHandler][] = [
 		['serviceFabric.refreshApplications', () => applicationsTree.refresh()],
-		['serviceFabric.refreshClusters', () => clustersTree.refresh()],
+		[
+			'serviceFabric.refreshClusters',
+			async () => {
+				// Re-probe every saved connection so status and health update; the store change redraws the tree.
+				const probes = connections.list().map((conn) => localCluster.refresh(conn));
+				if (probes.length === 0) clustersTree.refresh();
+				await Promise.all(probes);
+			},
+		],
 		[
 			'serviceFabric.openFile',
 			async (uri: vscode.Uri | undefined) => {
@@ -181,7 +245,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		['serviceFabric.cluster.stopLocal', () => stopLocalCluster(logger)],
 		['serviceFabric.cluster.resetLocal', () => resetLocalCluster(logger)],
 		['serviceFabric.cluster.switchLocalMode', () => switchLocalClusterMode(logger)],
-		['serviceFabric.cluster.openExplorer', (node?: ClusterTreeItem) => openClusterExplorer(connections, node?.connection)],
+		['serviceFabric.cluster.openExplorer', (node?: ClusterTreeItem) => openClusterExplorer(connections, node)],
+		['serviceFabric.cluster.filter.hideOk', toggleClusterFilter('hideOk')],
+		['serviceFabric.cluster.filter.showOk', toggleClusterFilter('hideOk')],
+		['serviceFabric.cluster.filter.hideWarning', toggleClusterFilter('hideWarning')],
+		['serviceFabric.cluster.filter.showWarning', toggleClusterFilter('hideWarning')],
+		['serviceFabric.cluster.filter.hideError', toggleClusterFilter('hideError')],
+		['serviceFabric.cluster.filter.showError', toggleClusterFilter('hideError')],
+		['serviceFabric.cluster.filter.hideCompletedRepairs', toggleClusterFilter('hideCompletedRepairs')],
+		['serviceFabric.cluster.filter.showCompletedRepairs', toggleClusterFilter('hideCompletedRepairs')],
+		['serviceFabric.cluster.filter.sortByHealth', toggleClusterFilter('sortByHealth')],
+		['serviceFabric.cluster.filter.sortDefault', toggleClusterFilter('sortByHealth')],
+		['serviceFabric.cluster.filter.pick', pickClusterFilter],
+		[
+			'serviceFabric.cluster.filter.clear',
+			async () => {
+				await clustersTree.setFilter(EMPTY_FILTER);
+				publishClusterFilter();
+			},
+		],
+		...clusterEntityCommands({ store: connections, local: localCluster, tree: clustersTree, documents: clusterDocuments, logger }),
 		['serviceFabric.createApplication', () => runCreateApplicationCommand(logger)],
 		['serviceFabric.addService', (arg) => runAddServiceCommand(projects, logger, toCommandTarget(arg))],
 		['serviceFabric.removeService', (arg) => runRemoveServiceCommand(projects, logger, toCommandTarget(arg))],

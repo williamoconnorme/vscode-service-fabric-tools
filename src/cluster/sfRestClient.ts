@@ -53,6 +53,163 @@ export interface DeployedCodePackageInfo {
 	hostType: string;
 }
 
+/** One provisioned application type version, as returned by `SfRestClient.getApplicationTypes`. */
+export interface ApplicationTypeInfo {
+	name: string;
+	version: string;
+	/** `Provisioning` / `Available` / `Unprovisioning` / `Failed`. */
+	status: string;
+	statusDetails: string;
+	defaultParameters: { key: string; value: string }[];
+	/** `ServiceFabricApplicationPackage` / `Compose` / `MeshApplicationDescription`. */
+	definitionKind: string;
+}
+
+/** An application as returned by `SfRestClient.getApplications`. */
+export interface ApplicationInfo {
+	/** Gateway identity (`fabric:/` stripped, `/` → `~`), URL-encoded for path use. */
+	id: string;
+	/** Display name without the `fabric:/` prefix. */
+	name: string;
+	typeName: string;
+	typeVersion: string;
+	status: string;
+	healthState: string;
+	parameters: { key: string; value: string }[];
+}
+
+/** A service as returned by `SfRestClient.getServices`. */
+export interface ServiceInfo {
+	/** URL-encoded service `Id` (e.g. `MyApp~MyService`). */
+	id: string;
+	/** Full `fabric:/` name. */
+	name: string;
+	/** `Stateful` / `Stateless`. */
+	kind: string;
+	typeName: string;
+	manifestVersion: string;
+	healthState: string;
+	status: string;
+	hasPersistedState: boolean;
+	isServiceGroup: boolean;
+}
+
+/** A partition as returned by `SfRestClient.getPartitions`. */
+export interface PartitionInfo {
+	id: string;
+	/** `Stateful` / `Stateless`. */
+	serviceKind: string;
+	/** `Singleton` / `Int64Range` / `Named`. */
+	schemeKind: string;
+	/** Named-partition name or `[low, high]` for ranged partitions; empty for singletons. */
+	keyDescription: string;
+	status: string;
+	healthState: string;
+	targetReplicaSetSize: number | undefined;
+	minReplicaSetSize: number | undefined;
+	instanceCount: number | undefined;
+}
+
+/** A replica (stateful) or instance (stateless) as returned by `SfRestClient.getReplicas`. */
+export interface ReplicaInfo {
+	/** `ReplicaId` for stateful services, `InstanceId` for stateless ones. */
+	id: string;
+	serviceKind: string;
+	/** `Primary` / `ActiveSecondary` / `IdleSecondary` / `None`; empty for instances. */
+	role: string;
+	status: string;
+	healthState: string;
+	nodeName: string;
+	address: string;
+	lastInBuildDurationInSeconds: string;
+}
+
+/** Full node record (`/Nodes/{name}`), a superset of {@link ClusterNodeInfo}. */
+export interface ClusterNodeDetail extends ClusterNodeInfo {
+	id: string;
+	instanceId: string;
+	ipAddressOrFqdn: string;
+	codeVersion: string;
+	configVersion: string;
+	isSeedNode: boolean;
+	upgradeDomain: string;
+	faultDomain: string;
+	nodeDeactivationInfo: unknown;
+}
+
+/** An application deployed on a specific node (`/Nodes/{name}/$/GetApplications`). */
+export interface DeployedApplicationOnNodeInfo {
+	id: string;
+	name: string;
+	typeName: string;
+	status: string;
+	healthState: string;
+	workDirectory: string;
+	logDirectory: string;
+	tempDirectory: string;
+}
+
+/** A service package deployed on a node (`/Nodes/{name}/$/GetApplications/{app}/$/GetServicePackages`). */
+export interface DeployedServicePackageInfo {
+	name: string;
+	version: string;
+	status: string;
+	healthState: string;
+	/** Empty for `SharedProcess` activation. */
+	servicePackageActivationId: string;
+}
+
+/** A code package deployed on one node, with the fields needed to restart it. */
+export interface DeployedCodePackageDetail extends DeployedCodePackageInfo {
+	servicePackageActivationId: string;
+	/** Current entry-point instance id; `0` when unknown. */
+	codePackageInstanceId: string;
+	setupEntryPointStatus: string;
+	raw: unknown;
+}
+
+/** A replica/instance deployed on a node (`/Nodes/{name}/$/GetApplications/{app}/$/GetReplicas`). */
+export interface DeployedReplicaInfo {
+	serviceKind: string;
+	serviceName: string;
+	serviceTypeName: string;
+	serviceManifestName: string;
+	codePackageName: string;
+	partitionId: string;
+	/** `ReplicaId` or `InstanceId`. */
+	id: string;
+	role: string;
+	status: string;
+	address: string;
+	servicePackageActivationId: string;
+	hostProcessId: string;
+}
+
+/** A Repair Manager task (`/$/GetRepairTaskList`), as shown under "Repair Jobs" in Service Fabric Explorer. */
+export interface RepairTaskInfo {
+	taskId: string;
+	/** Optimistic-concurrency version; required by cancel / approve / delete. */
+	version: string;
+	description: string;
+	/** `Created` / `Claimed` / `Preparing` / `Approved` / `Executing` / `Restoring` / `Completed`. */
+	state: string;
+	/** Bitwise flags: 1 cancel requested, 2 abort requested, 4 approval forced. */
+	flags: number;
+	action: string;
+	/** Target node names (`Target.Kind === 'Node'`); empty for other kinds. */
+	targetNodes: string[];
+	executor: string;
+	/** `Succeeded` / `Cancelled` / `Interrupted` / `Failed` / `Pending`; empty before Restoring. */
+	resultStatus: string;
+	resultDetails: string;
+	createdUtc: string;
+	completedUtc: string;
+	raw: unknown;
+}
+
+/** `Pause` / `Restart` / `RemoveData` / `RemoveNode`, see the DeactivateNode REST API. */
+export type NodeDeactivationIntent = 'Pause' | 'Restart' | 'RemoveData' | 'RemoveNode';
+
 /** Entra ID configuration a cluster publishes at `/$/GetAadMetadata`. */
 export interface AadMetadata {
 	authority: string;
@@ -238,14 +395,495 @@ export class SfRestClient {
 		};
 	}
 
+	// ---- Cluster -----------------------------------------------------------------
+
+	/** `/$/GetClusterManifest`: the cluster manifest XML as a string. */
+	async getClusterManifest(timeoutMs = 10000): Promise<string> {
+		const json = await this.get('/$/GetClusterManifest', timeoutMs);
+		return String(json?.Manifest ?? '');
+	}
+
+	/** `/$/GetClusterVersion` (6.4+); `undefined` on older runtimes. */
+	async getClusterVersion(timeoutMs = 5000): Promise<string | undefined> {
+		const json = await this.get('/$/GetClusterVersion', timeoutMs, { apiVersion: '6.4' }).catch(() => undefined);
+		return json?.Version ? String(json.Version) : undefined;
+	}
+
+	/** Full `/$/GetClusterHealth` payload (events, node and application health states). */
+	getClusterHealthDetail(timeoutMs = 10000): Promise<unknown> {
+		return this.get('/$/GetClusterHealth', timeoutMs);
+	}
+
+	/** `/$/GetUpgradeProgress`: the cluster upgrade state. */
+	getClusterUpgradeProgress(timeoutMs = 10000): Promise<unknown> {
+		return this.get('/$/GetUpgradeProgress', timeoutMs);
+	}
+
+	/** `/$/GetLoadInformation`: cluster-wide load metrics. */
+	getClusterLoadInformation(timeoutMs = 10000): Promise<unknown> {
+		return this.get('/$/GetLoadInformation', timeoutMs);
+	}
+
+	// ---- Application types -------------------------------------------------------
+
+	/** `/ApplicationTypes`: every provisioned type version, following continuation tokens. */
+	async getApplicationTypes(timeoutMs = 10000): Promise<ApplicationTypeInfo[]> {
+		const items = await this.getAllPages('/ApplicationTypes', timeoutMs);
+		return items.map((t) => ({
+			name: String(t?.Name ?? ''),
+			version: String(t?.Version ?? ''),
+			status: String(t?.Status ?? ''),
+			statusDetails: String(t?.StatusDetails ?? ''),
+			defaultParameters: toParameterList(t?.DefaultParameterList),
+			definitionKind: String(t?.ApplicationTypeDefinitionKind ?? ''),
+		}));
+	}
+
+	/** `/ApplicationTypes/{name}/$/GetServiceTypes?ApplicationTypeVersion=…`: raw service type list. */
+	getServiceTypes(typeName: string, typeVersion: string, timeoutMs = 10000): Promise<unknown> {
+		return this.get(
+			`/ApplicationTypes/${encodeURIComponent(typeName)}/$/GetServiceTypes?ApplicationTypeVersion=${encodeURIComponent(typeVersion)}`,
+			timeoutMs,
+		);
+	}
+
+	/** `/ApplicationTypes/{name}/$/Unprovision`: unregisters one version of an application type. */
+	async unprovisionApplicationType(typeName: string, typeVersion: string, timeoutMs = 60000): Promise<void> {
+		await this.post(`/ApplicationTypes/${encodeURIComponent(typeName)}/$/Unprovision`, timeoutMs, {
+			body: { ApplicationTypeVersion: typeVersion, Async: true },
+		});
+	}
+
+	// ---- Applications ------------------------------------------------------------
+
+	/** `/Applications`: every application with its health state, following continuation tokens. */
+	async getApplications(timeoutMs = 10000): Promise<ApplicationInfo[]> {
+		const items = await this.getAllPages('/Applications', timeoutMs);
+		return items.map(toApplicationInfo);
+	}
+
+	/** `/Applications/{id}`: one application, or `undefined` when it no longer exists. */
+	async getApplication(applicationId: string, timeoutMs = 10000): Promise<ApplicationInfo | undefined> {
+		const json = await this.get(`/Applications/${applicationId}`, timeoutMs);
+		return json ? toApplicationInfo(json) : undefined;
+	}
+
+	getApplicationHealth(applicationId: string, timeoutMs = 10000): Promise<unknown> {
+		return this.get(`/Applications/${applicationId}/$/GetHealth`, timeoutMs);
+	}
+
+	getApplicationUpgradeProgress(applicationId: string, timeoutMs = 10000): Promise<unknown> {
+		return this.get(`/Applications/${applicationId}/$/GetUpgradeProgress`, timeoutMs);
+	}
+
+	/** `/Applications/{id}/$/Delete`: deletes an application and all its services. */
+	async deleteApplication(applicationId: string, forceRemove = false, timeoutMs = 60000): Promise<void> {
+		await this.post(`/Applications/${applicationId}/$/Delete${forceRemove ? '?ForceRemove=true' : ''}`, timeoutMs);
+	}
+
+	// ---- Services ----------------------------------------------------------------
+
+	/** `/Applications/{id}/$/GetServices`: the services of an application. Use `System` for system services. */
+	async getServices(applicationId: string, timeoutMs = 10000): Promise<ServiceInfo[]> {
+		const items = await this.getAllPages(`/Applications/${applicationId}/$/GetServices`, timeoutMs);
+		return items.map((svc) => ({
+			id: encodeURIComponent(String(svc?.Id ?? '')),
+			name: String(svc?.Name ?? ''),
+			kind: String(svc?.ServiceKind ?? ''),
+			typeName: String(svc?.TypeName ?? ''),
+			manifestVersion: String(svc?.ManifestVersion ?? ''),
+			healthState: String(svc?.HealthState ?? ''),
+			status: String(svc?.ServiceStatus ?? ''),
+			hasPersistedState: Boolean(svc?.HasPersistedState),
+			isServiceGroup: Boolean(svc?.IsServiceGroup),
+		}));
+	}
+
+	getServiceDescription(serviceId: string, timeoutMs = 10000): Promise<unknown> {
+		return this.get(`/Services/${serviceId}/$/GetDescription`, timeoutMs);
+	}
+
+	getServiceHealth(serviceId: string, timeoutMs = 10000): Promise<unknown> {
+		return this.get(`/Services/${serviceId}/$/GetHealth`, timeoutMs);
+	}
+
+	/** `/Services/{id}/$/Delete`. */
+	async deleteService(serviceId: string, forceRemove = false, timeoutMs = 60000): Promise<void> {
+		await this.post(`/Services/${serviceId}/$/Delete${forceRemove ? '?ForceRemove=true' : ''}`, timeoutMs);
+	}
+
+	/**
+	 * `/Services/{id}/$/Update` with only the replica/instance count flag set:
+	 * `InstanceCount` for stateless services (-1 = every node), `TargetReplicaSetSize` for stateful ones.
+	 */
+	async scaleService(serviceId: string, serviceKind: string, count: number, timeoutMs = 60000): Promise<void> {
+		const body =
+			serviceKind === 'Stateless'
+				? { ServiceKind: 'Stateless', Flags: '1', InstanceCount: count }
+				: { ServiceKind: 'Stateful', Flags: '1', TargetReplicaSetSize: count };
+		await this.post(`/Services/${serviceId}/$/Update`, timeoutMs, { body });
+	}
+
+	// ---- Partitions --------------------------------------------------------------
+
+	/** `/Services/{id}/$/GetPartitions`. `serviceId` must already be URL-encoded. */
+	async getPartitions(serviceId: string, timeoutMs = 10000): Promise<PartitionInfo[]> {
+		const items = await this.getAllPages(`/Services/${serviceId}/$/GetPartitions`, timeoutMs);
+		return items.map((p) => {
+			const info = p?.PartitionInformation ?? {};
+			const scheme = String(info?.ServicePartitionKind ?? '');
+			const keyDescription =
+				scheme === 'Named' ? String(info?.Name ?? '') : scheme === 'Int64Range' ? `[${info?.LowKey ?? '?'}, ${info?.HighKey ?? '?'}]` : '';
+			return {
+				id: String(info?.Id ?? ''),
+				serviceKind: String(p?.ServiceKind ?? ''),
+				schemeKind: scheme,
+				keyDescription,
+				status: String(p?.PartitionStatus ?? ''),
+				healthState: String(p?.HealthState ?? ''),
+				targetReplicaSetSize: toOptionalNumber(p?.TargetReplicaSetSize),
+				minReplicaSetSize: toOptionalNumber(p?.MinReplicaSetSize),
+				instanceCount: toOptionalNumber(p?.InstanceCount),
+			};
+		});
+	}
+
+	getPartitionHealth(partitionId: string, timeoutMs = 10000): Promise<unknown> {
+		return this.get(`/Partitions/${encodeURIComponent(partitionId)}/$/GetHealth`, timeoutMs);
+	}
+
+	getPartitionLoadInformation(partitionId: string, timeoutMs = 10000): Promise<unknown> {
+		return this.get(`/Partitions/${encodeURIComponent(partitionId)}/$/GetLoadInformation`, timeoutMs);
+	}
+
+	/** `/Partitions/{id}/$/ResetLoad`: clears reported load so the balancer uses defaults. */
+	async resetPartitionLoad(partitionId: string, timeoutMs = 30000): Promise<void> {
+		await this.post(`/Partitions/${encodeURIComponent(partitionId)}/$/ResetLoad`, timeoutMs);
+	}
+
+	/** `/Partitions/{id}/$/Recover`: forces a quorum-lost partition to recover (potential data loss). */
+	async recoverPartition(partitionId: string, timeoutMs = 30000): Promise<void> {
+		await this.post(`/Partitions/${encodeURIComponent(partitionId)}/$/Recover`, timeoutMs);
+	}
+
+	// ---- Replicas ----------------------------------------------------------------
+
+	/** `/Partitions/{id}/$/GetReplicas`. */
+	async getReplicas(partitionId: string, timeoutMs = 10000): Promise<ReplicaInfo[]> {
+		const items = await this.getAllPages(`/Partitions/${encodeURIComponent(partitionId)}/$/GetReplicas`, timeoutMs);
+		return items.map((r) => ({
+			id: String(r?.ReplicaId ?? r?.InstanceId ?? ''),
+			serviceKind: String(r?.ServiceKind ?? ''),
+			role: String(r?.ReplicaRole ?? ''),
+			status: String(r?.ReplicaStatus ?? ''),
+			healthState: String(r?.HealthState ?? ''),
+			nodeName: String(r?.NodeName ?? ''),
+			address: String(r?.Address ?? ''),
+			lastInBuildDurationInSeconds: String(r?.LastInBuildDurationInSeconds ?? ''),
+		}));
+	}
+
+	getReplicaHealth(partitionId: string, replicaId: string, timeoutMs = 10000): Promise<unknown> {
+		return this.get(`/Partitions/${encodeURIComponent(partitionId)}/$/GetReplicas/${encodeURIComponent(replicaId)}/$/GetHealth`, timeoutMs);
+	}
+
+	/** `/Nodes/{node}/$/GetPartitions/{partition}/$/GetReplicas/{replica}/$/GetDetail`: host-side replica detail. */
+	getReplicaDetail(nodeName: string, partitionId: string, replicaId: string, timeoutMs = 10000): Promise<unknown> {
+		return this.get(`${replicaOnNodePath(nodeName, partitionId, replicaId)}/$/GetDetail`, timeoutMs);
+	}
+
+	/** Restarts a persisted stateful replica in place (simulated transient failure). */
+	async restartReplica(nodeName: string, partitionId: string, replicaId: string, timeoutMs = 30000): Promise<void> {
+		await this.post(`${replicaOnNodePath(nodeName, partitionId, replicaId)}/$/Restart`, timeoutMs);
+	}
+
+	/** Removes a replica or instance (simulated permanent failure). */
+	async removeReplica(nodeName: string, partitionId: string, replicaId: string, forceRemove = false, timeoutMs = 30000): Promise<void> {
+		await this.post(`${replicaOnNodePath(nodeName, partitionId, replicaId)}/$/Delete${forceRemove ? '?ForceRemove=true' : ''}`, timeoutMs);
+	}
+
+	// ---- Nodes -------------------------------------------------------------------
+
+	/** `/Nodes/{name}`: full node record. */
+	async getNode(nodeName: string, timeoutMs = 10000): Promise<ClusterNodeDetail> {
+		const n = await this.get(`/Nodes/${encodeURIComponent(nodeName)}`, timeoutMs);
+		return {
+			name: String(n?.Name ?? nodeName),
+			status: String(n?.NodeStatus ?? ''),
+			healthState: String(n?.HealthState ?? ''),
+			nodeType: String(n?.Type ?? ''),
+			id: String(n?.Id?.Id ?? ''),
+			instanceId: String(n?.InstanceId ?? '0'),
+			ipAddressOrFqdn: String(n?.IpAddressOrFQDN ?? ''),
+			codeVersion: String(n?.CodeVersion ?? ''),
+			configVersion: String(n?.ConfigVersion ?? ''),
+			isSeedNode: Boolean(n?.IsSeedNode),
+			upgradeDomain: String(n?.UpgradeDomain ?? ''),
+			faultDomain: String(n?.FaultDomain ?? ''),
+			nodeDeactivationInfo: n?.NodeDeactivationInfo,
+		};
+	}
+
+	getNodeHealth(nodeName: string, timeoutMs = 10000): Promise<unknown> {
+		return this.get(`/Nodes/${encodeURIComponent(nodeName)}/$/GetHealth`, timeoutMs);
+	}
+
+	getNodeLoadInformation(nodeName: string, timeoutMs = 10000): Promise<unknown> {
+		return this.get(`/Nodes/${encodeURIComponent(nodeName)}/$/GetLoadInformation`, timeoutMs);
+	}
+
+	async activateNode(nodeName: string, timeoutMs = 30000): Promise<void> {
+		await this.post(`/Nodes/${encodeURIComponent(nodeName)}/$/Activate`, timeoutMs);
+	}
+
+	async deactivateNode(nodeName: string, intent: NodeDeactivationIntent, timeoutMs = 30000): Promise<void> {
+		await this.post(`/Nodes/${encodeURIComponent(nodeName)}/$/Deactivate`, timeoutMs, { body: { DeactivationIntent: intent } });
+	}
+
+	/** Restarts the Fabric process on a node. `nodeInstanceId` `"0"` matches any instance. */
+	async restartNode(nodeName: string, nodeInstanceId = '0', timeoutMs = 30000): Promise<void> {
+		await this.post(`/Nodes/${encodeURIComponent(nodeName)}/$/Restart`, timeoutMs, {
+			body: { NodeInstanceId: nodeInstanceId, CreateFabricDump: 'False' },
+		});
+	}
+
+	/** Tells the cluster a down node's state is gone for good. */
+	async removeNodeState(nodeName: string, timeoutMs = 30000): Promise<void> {
+		await this.post(`/Nodes/${encodeURIComponent(nodeName)}/$/RemoveNodeState`, timeoutMs);
+	}
+
+	// ---- Repair tasks --------------------------------------------------------------
+
+	/**
+	 * `/$/GetRepairTaskList`: every repair task, newest first. Clusters without the
+	 * RepairManager add-on drop the connection; that is reported as a clear error.
+	 */
+	async getRepairTasks(timeoutMs = 10000): Promise<RepairTaskInfo[]> {
+		let raw: unknown;
+		try {
+			raw = await this.get('/$/GetRepairTaskList', timeoutMs);
+		} catch (err) {
+			const message = (err as Error).message;
+			if (/socket hang up|ECONNRESET|HTTP 404|FABRIC_E_SERVICE_DOES_NOT_EXIST|RepairManager/i.test(message)) {
+				throw new Error(`Repair Manager is not enabled on this cluster (the RepairManager add-on feature is missing). ${message}`);
+			}
+			throw err;
+		}
+		return toArray(raw)
+			.map((t): RepairTaskInfo => {
+				const target = t?.Target;
+				return {
+					taskId: String(t?.TaskId ?? ''),
+					version: String(t?.Version ?? '0'),
+					description: String(t?.Description ?? ''),
+					state: String(t?.State ?? ''),
+					flags: Number(t?.Flags ?? 0) || 0,
+					action: String(t?.Action ?? ''),
+					targetNodes: String(target?.Kind ?? '') === 'Node' ? toArray(target?.NodeNames).map(String) : [],
+					executor: String(t?.Executor ?? ''),
+					resultStatus: String(t?.ResultStatus ?? ''),
+					resultDetails: String(t?.ResultDetails ?? ''),
+					createdUtc: String(t?.History?.CreatedUtcTimestamp ?? ''),
+					completedUtc: String(t?.History?.CompletedUtcTimestamp ?? ''),
+					raw: t,
+				};
+			})
+			.sort((a, b) => b.createdUtc.localeCompare(a.createdUtc));
+	}
+
+	/** `/$/CancelRepairTask`: asks the executor to cancel (or, with `requestAbort`, abort) a task. */
+	async cancelRepairTask(taskId: string, version: string, requestAbort = false, timeoutMs = 30000): Promise<void> {
+		await this.post('/$/CancelRepairTask', timeoutMs, { body: { TaskId: taskId, Version: version, RequestAbort: requestAbort } });
+	}
+
+	/** `/$/ForceApproveRepairTask`: approves a Preparing task without waiting for the safety checks. */
+	async forceApproveRepairTask(taskId: string, version: string, timeoutMs = 30000): Promise<void> {
+		await this.post('/$/ForceApproveRepairTask', timeoutMs, { body: { TaskId: taskId, Version: version } });
+	}
+
+	/** `/$/DeleteRepairTask`: removes a Completed task from the Repair Manager's list. */
+	async deleteRepairTask(taskId: string, version: string, timeoutMs = 30000): Promise<void> {
+		await this.post('/$/DeleteRepairTask', timeoutMs, { body: { TaskId: taskId, Version: version } });
+	}
+
+	// ---- Deployed (per-node) entities ---------------------------------------------
+
+	/** `/Nodes/{name}/$/GetApplications`: applications with code deployed on the node. */
+	async getDeployedApplicationsOnNode(nodeName: string, timeoutMs = 10000): Promise<DeployedApplicationOnNodeInfo[]> {
+		const items = await this.getAllPages(`/Nodes/${encodeURIComponent(nodeName)}/$/GetApplications`, timeoutMs);
+		return items.map((a) => ({
+			id: encodeURIComponent(String(a?.Id ?? '')),
+			name: String(a?.Name ?? '').replace(/^fabric:\//, ''),
+			typeName: String(a?.TypeName ?? ''),
+			status: String(a?.Status ?? ''),
+			healthState: String(a?.HealthState ?? ''),
+			workDirectory: String(a?.WorkDirectory ?? ''),
+			logDirectory: String(a?.LogDirectory ?? ''),
+			tempDirectory: String(a?.TempDirectory ?? ''),
+		}));
+	}
+
+	getDeployedApplicationHealth(nodeName: string, applicationId: string, timeoutMs = 10000): Promise<unknown> {
+		return this.get(`${deployedAppPath(nodeName, applicationId)}/$/GetHealth`, timeoutMs);
+	}
+
+	/** `/Nodes/{name}/$/GetApplications/{app}/$/GetServicePackages`. Returns a bare array. */
+	async getDeployedServicePackages(nodeName: string, applicationId: string, timeoutMs = 10000): Promise<DeployedServicePackageInfo[]> {
+		const raw = await this.get(`${deployedAppPath(nodeName, applicationId)}/$/GetServicePackages`, timeoutMs);
+		return toArray(raw).map((p) => ({
+			name: String(p?.Name ?? ''),
+			version: String(p?.Version ?? ''),
+			status: String(p?.Status ?? ''),
+			healthState: String(p?.HealthState ?? ''),
+			servicePackageActivationId: String(p?.ServicePackageActivationId ?? ''),
+		}));
+	}
+
+	getDeployedServicePackageHealth(
+		nodeName: string,
+		applicationId: string,
+		servicePackageName: string,
+		timeoutMs = 10000,
+	): Promise<unknown> {
+		return this.get(
+			`${deployedAppPath(nodeName, applicationId)}/$/GetServicePackages/${encodeURIComponent(servicePackageName)}/$/GetHealth`,
+			timeoutMs,
+		);
+	}
+
+	/** Code packages of one service manifest on one node, with the instance ids needed to restart them. */
+	async getDeployedCodePackagesForManifest(
+		nodeName: string,
+		applicationId: string,
+		serviceManifestName: string,
+		timeoutMs = 10000,
+	): Promise<DeployedCodePackageDetail[]> {
+		const raw = await this.get(
+			`${deployedAppPath(nodeName, applicationId)}/$/GetCodePackages?ServiceManifestName=${encodeURIComponent(serviceManifestName)}`,
+			timeoutMs,
+		);
+		return toArray(raw).map((cp) => {
+			const rawPid = cp?.MainEntryPoint?.ProcessId ?? cp?.SetupEntryPoint?.ProcessId;
+			const entryPid = Number(rawPid);
+			return {
+				nodeName,
+				serviceManifestName: String(cp?.ServiceManifestName ?? serviceManifestName),
+				codePackageName: String(cp?.Name ?? ''),
+				codePackageVersion: String(cp?.Version ?? ''),
+				status: String(cp?.Status ?? ''),
+				entryPointStatus: String(cp?.MainEntryPoint?.Status ?? ''),
+				processId: Number.isFinite(entryPid) && entryPid > 0 ? entryPid : undefined,
+				hostType: String(cp?.HostType ?? ''),
+				servicePackageActivationId: String(cp?.ServicePackageActivationId ?? ''),
+				codePackageInstanceId: String(cp?.MainEntryPoint?.InstanceId ?? '0'),
+				setupEntryPointStatus: String(cp?.SetupEntryPoint?.Status ?? ''),
+				raw: cp,
+			};
+		});
+	}
+
+	/** Restarts a code package host process (`/$/GetCodePackages/$/Restart`). */
+	async restartDeployedCodePackage(
+		nodeName: string,
+		applicationId: string,
+		pkg: { serviceManifestName: string; codePackageName: string; codePackageInstanceId: string; servicePackageActivationId?: string },
+		timeoutMs = 30000,
+	): Promise<void> {
+		await this.post(`${deployedAppPath(nodeName, applicationId)}/$/GetCodePackages/$/Restart`, timeoutMs, {
+			body: {
+				ServiceManifestName: pkg.serviceManifestName,
+				CodePackageName: pkg.codePackageName,
+				CodePackageInstanceId: pkg.codePackageInstanceId || '0',
+				...(pkg.servicePackageActivationId ? { ServicePackageActivationId: pkg.servicePackageActivationId } : {}),
+			},
+		});
+	}
+
+	/** Container stdout/stderr for a containerised code package (`/$/GetCodePackages/$/ContainerLogs`, 6.2+). */
+	async getContainerLogs(
+		nodeName: string,
+		applicationId: string,
+		serviceManifestName: string,
+		codePackageName: string,
+		opts: { tail?: string; previous?: boolean } = {},
+		timeoutMs = 30000,
+	): Promise<string> {
+		const query = new URLSearchParams({ ServiceManifestName: serviceManifestName, CodePackageName: codePackageName });
+		if (opts.tail) query.set('Tail', opts.tail);
+		if (opts.previous) query.set('Previous', 'true');
+		const json = await this.get(`${deployedAppPath(nodeName, applicationId)}/$/GetCodePackages/$/ContainerLogs?${query}`, timeoutMs, {
+			apiVersion: '6.2',
+		});
+		return String(json?.Content ?? '');
+	}
+
+	/** Replicas/instances of one service manifest hosted on one node. */
+	async getDeployedReplicas(
+		nodeName: string,
+		applicationId: string,
+		serviceManifestName: string,
+		timeoutMs = 10000,
+	): Promise<DeployedReplicaInfo[]> {
+		const raw = await this.get(
+			`${deployedAppPath(nodeName, applicationId)}/$/GetReplicas?ServiceManifestName=${encodeURIComponent(serviceManifestName)}`,
+			timeoutMs,
+		);
+		return toArray(raw).map((r) => ({
+			serviceKind: String(r?.ServiceKind ?? ''),
+			serviceName: String(r?.ServiceName ?? ''),
+			serviceTypeName: String(r?.ServiceTypeName ?? ''),
+			serviceManifestName: String(r?.ServiceManifestName ?? serviceManifestName),
+			codePackageName: String(r?.CodePackageName ?? ''),
+			partitionId: String(r?.PartitionId ?? ''),
+			id: String(r?.ReplicaId ?? r?.InstanceId ?? ''),
+			role: String(r?.ReplicaRole ?? ''),
+			status: String(r?.ReplicaStatus ?? ''),
+			address: String(r?.Address ?? ''),
+			servicePackageActivationId: String(r?.ServicePackageActivationId ?? ''),
+			hostProcessId: String(r?.HostProcessId ?? ''),
+		}));
+	}
+
+	/** Follows `ContinuationToken` on a paged list endpoint and returns the concatenated `Items`. */
+	private async getAllPages(pathAndQuery: string, timeoutMs: number): Promise<any[]> {
+		const items: any[] = [];
+		let token: string | undefined;
+		for (let page = 0; page < 50; page++) {
+			const sep = pathAndQuery.includes('?') ? '&' : '?';
+			const json = await this.get(token ? `${pathAndQuery}${sep}ContinuationToken=${encodeURIComponent(token)}` : pathAndQuery, timeoutMs);
+			items.push(...toArray(json));
+			token = json?.ContinuationToken ? String(json.ContinuationToken) : undefined;
+			if (!token) break;
+		}
+		return items;
+	}
+
+	/** Issues a POST against the gateway. `body` (if any) is sent as JSON; an empty response resolves to `undefined`. */
+	rawPost(pathAndQuery: string, body?: unknown, timeoutMs = 30000, opts: RequestOptions = {}): Promise<unknown> {
+		return this.request('POST', pathAndQuery, timeoutMs, { ...opts, body });
+	}
+
 	// Resolves with the parsed JSON body (or undefined for an empty body). Typed `any`
 	// because gateway payloads are untyped JSON that callers probe with optional chaining.
-	private async get(pathAndQuery: string, timeoutMs: number, opts: { apiVersion?: string; anonymous?: boolean } = {}): Promise<any> {
+	private get(pathAndQuery: string, timeoutMs: number, opts: RequestOptions = {}): Promise<any> {
+		return this.request('GET', pathAndQuery, timeoutMs, opts);
+	}
+
+	private post(pathAndQuery: string, timeoutMs: number, opts: RequestOptions = {}): Promise<any> {
+		return this.request('POST', pathAndQuery, timeoutMs, opts);
+	}
+
+	private async request(method: 'GET' | 'POST', pathAndQuery: string, timeoutMs: number, opts: RequestOptions = {}): Promise<any> {
 		const sep = pathAndQuery.includes('?') ? '&' : '?';
 		const requestUrl = new url.URL(`${this.endpoint}${pathAndQuery}${sep}api-version=${opts.apiVersion ?? this.apiVersion}`);
 		const isHttps = requestUrl.protocol === 'https:';
 		const lib = isHttps ? https : http;
 		const headers: Record<string, string> = { Accept: 'application/json' };
+		const payload = opts.body === undefined ? undefined : Buffer.from(JSON.stringify(opts.body), 'utf8');
+		if (payload) {
+			headers['Content-Type'] = 'application/json';
+			headers['Content-Length'] = String(payload.length);
+		}
 		const token = opts.anonymous ? undefined : await this.options.getAccessToken?.();
 		if (token) {
 			// Never send a bearer token in clear text.
@@ -255,7 +893,7 @@ export class SfRestClient {
 		return new Promise((resolve, reject) => {
 			const req = lib.request(
 				{
-					method: 'GET',
+					method,
 					hostname: requestUrl.hostname,
 					port: requestUrl.port || (requestUrl.protocol === 'https:' ? 443 : 80),
 					path: `${requestUrl.pathname}${requestUrl.search}`,
@@ -273,7 +911,7 @@ export class SfRestClient {
 							return;
 						}
 						if (!res.statusCode || res.statusCode >= 400) {
-							reject(new Error(`HTTP ${res.statusCode} from ${requestUrl.href}: ${body}`));
+							reject(new SfGatewayError(res.statusCode ?? 0, requestUrl.href, body));
 							return;
 						}
 						try {
@@ -286,8 +924,49 @@ export class SfRestClient {
 			);
 			req.on('error', (err) => reject(wrapError(err, requestUrl.href)));
 			req.on('timeout', () => req.destroy(new Error(`Request to ${requestUrl.href} timed out after ${timeoutMs}ms`)));
+			if (payload) req.write(payload);
 			req.end();
 		});
+	}
+}
+
+/** Per-request overrides for {@link SfRestClient}. */
+interface RequestOptions {
+	/** Overrides the client's default `api-version` query value. */
+	apiVersion?: string;
+	/** Skips the bearer token (for endpoints that are anonymous by design). */
+	anonymous?: boolean;
+	/** JSON request body (POST only). */
+	body?: unknown;
+}
+
+/**
+ * The gateway answered with an HTTP error. `code` and `detail` carry the
+ * `FabricError` payload (e.g. `FABRIC_E_APPLICATION_NOT_FOUND`) when present.
+ */
+export class SfGatewayError extends Error {
+	readonly code: string | undefined;
+	readonly detail: string | undefined;
+
+	constructor(
+		readonly statusCode: number,
+		requestUrl: string,
+		body: string,
+	) {
+		let code: string | undefined;
+		let detail: string | undefined;
+		try {
+			const parsed = JSON.parse(body);
+			code = parsed?.Error?.Code ? String(parsed.Error.Code) : undefined;
+			detail = parsed?.Error?.Message ? String(parsed.Error.Message) : undefined;
+		} catch {
+			/* not a FabricError payload */
+		}
+		const summary = detail ? `${code ? `${code}: ` : ''}${detail}` : body;
+		super(`HTTP ${statusCode} from ${requestUrl}${summary ? `: ${summary}` : ''}`);
+		this.name = 'SfGatewayError';
+		this.code = code;
+		this.detail = detail;
 	}
 }
 
@@ -305,6 +984,40 @@ export class SfAuthError extends Error {
 		);
 		this.name = 'SfAuthError';
 	}
+}
+
+function toArray(raw: any): any[] {
+	return Array.isArray(raw) ? raw : Array.isArray(raw?.Items) ? raw.Items : [];
+}
+
+function toParameterList(raw: any): { key: string; value: string }[] {
+	return toArray(raw).map((p) => ({ key: String(p?.Key ?? ''), value: String(p?.Value ?? '') }));
+}
+
+function toOptionalNumber(raw: unknown): number | undefined {
+	if (raw === undefined || raw === null || raw === '') return undefined;
+	const n = Number(raw);
+	return Number.isFinite(n) ? n : undefined;
+}
+
+function toApplicationInfo(it: any): ApplicationInfo {
+	return {
+		id: encodeURIComponent(String(it?.Id ?? '')),
+		name: String(it?.Name ?? '').replace(/^fabric:\//, ''),
+		typeName: String(it?.TypeName ?? ''),
+		typeVersion: String(it?.TypeVersion ?? ''),
+		status: String(it?.Status ?? ''),
+		healthState: String(it?.HealthState ?? ''),
+		parameters: toParameterList(it?.Parameters),
+	};
+}
+
+function deployedAppPath(nodeName: string, applicationId: string): string {
+	return `/Nodes/${encodeURIComponent(nodeName)}/$/GetApplications/${applicationId}`;
+}
+
+function replicaOnNodePath(nodeName: string, partitionId: string, replicaId: string): string {
+	return `/Nodes/${encodeURIComponent(nodeName)}/$/GetPartitions/${encodeURIComponent(partitionId)}/$/GetReplicas/${encodeURIComponent(replicaId)}`;
 }
 
 function wrapError(err: unknown, url: string): Error {
