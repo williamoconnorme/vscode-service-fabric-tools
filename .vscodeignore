@@ -13,3 +13,5 @@ tsconfig.json
 esbuild.config.mjs
 .prettierrc
 .claude/**
+scripts/**
+media/icon.svg

@@ -39,7 +39,11 @@
                 "extensions": [
                     ".sfproj"
                 ],
-                "configuration": "./language-configuration.json"
+                "configuration": "./language-configuration.json",
+                "icon": {
+                    "light": "media/sfproj-light.svg",
+                    "dark": "media/sfproj-dark.svg"
+                }
             }
         ],
         "grammars": [
@@ -54,7 +58,7 @@
                 {
                     "id": "serviceFabric",
                     "title": "Service Fabric",
-                    "icon": "$(server-environment)"
+                    "icon": "media/activitybar.svg"
                 }
             ]
         },
@@ -749,9 +753,11 @@
         "watch": "node esbuild.config.mjs --watch",
         "typecheck": "tsc --noEmit",
         "format": "prettier --write \"src/**/*.ts\"",
-        "package": "node -e \"require('fs').mkdirSync('artifacts',{recursive:true})\" && vsce package --no-dependencies --out artifacts/"
+        "package": "node -e \"require('fs').mkdirSync('artifacts',{recursive:true})\" && vsce package --no-dependencies --out artifacts/",
+        "icons": "node scripts/generate-icons.js"
     },
     "devDependencies": {
+        "@resvg/resvg-js": "^2.6.2",
         "@types/node": "^20.16.10",
         "@types/vscode": "^1.90.0",
         "@vscode/vsce": "^3.9.1",
@@ -761,5 +767,9 @@
     },
     "dependencies": {
         "fast-xml-parser": "^4.3.6"
+    },
+    "galleryBanner": {
+        "color": "#0a3d8f",
+        "theme": "dark"
     }
 }
