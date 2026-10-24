@@ -26,10 +26,9 @@ export class ClusterStatusBar implements vscode.Disposable {
 
 	update(): void {
 		const active = this.store.getActive();
+		// Nothing to show until a cluster is added.
 		if (!active) {
-			this.item.text = '$(server) SF: not connected';
-			this.item.tooltip = 'Click to select a Service Fabric cluster';
-			this.item.show();
+			this.item.hide();
 			return;
 		}
 		const icon = active.connected ? '$(pass-filled)' : '$(circle-slash)';
