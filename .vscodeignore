@@ -1,0 +1,9 @@
+.vscode/**
+.github/**
+reference/**
+design_plans/**
+artifacts/**
+node_modules/**
+FORK.md
+.gitignore
+.gitattributes

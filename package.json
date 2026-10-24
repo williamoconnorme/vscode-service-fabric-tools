@@ -1,19 +1,11 @@
 {
-    "name": "service-fabric-project-tools-vscode",
-    "displayName": "Service Fabric Project (sfproj) Tools",
+    "name": "service-fabric-project-tools-vscode-fork",
+    "displayName": "Service Fabric Project (sfproj) Tools (Fork)",
     "description": "First-class authoring, build, package, deploy, and debug support for Azure Service Fabric application projects (.sfproj) in VS Code.",
     "version": "1.1.11",
-    "publisher": "sfproj-tools",
+    "publisher": "williamoconnorme",
     "license": "MIT",
     "icon": "media/icon.png",
-    "repository": {
-        "type": "git",
-        "url": "https://github.com/coyesiku_microsoft/vscode-sfproj-tools.git"
-    },
-    "bugs": {
-        "url": "https://github.com/coyesiku_microsoft/vscode-sfproj-tools/issues"
-    },
-    "homepage": "https://github.com/coyesiku_microsoft/vscode-sfproj-tools#readme",
     "engines": {
         "vscode": "^1.90.0"
     },
@@ -28,7 +20,7 @@
         "azure",
         "msbuild"
     ],
-    "main": "./dist/extension.js",
+    "main": "./src/extension.js",
     "activationEvents": [
         "workspaceContains:**/*.sfproj",
         "onCommand:serviceFabric.createApplication"
@@ -751,28 +743,12 @@
         ]
     },
     "scripts": {
-        "vscode:prepublish": "npm run build:prod",
-        "build": "node esbuild.config.mjs",
-        "build:prod": "node esbuild.config.mjs --production",
-        "watch": "node esbuild.config.mjs --watch",
-        "typecheck": "tsc --noEmit",
-        "lint": "eslint .",
-        "test:unit": "node ./scripts/run-tests.mjs",
-        "test": "npm run typecheck && npm run lint && npm run test:unit",
-        "package": "vsce package --no-dependencies --out artifacts/",
-        "release": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/release.ps1"
+        "format": "prettier --write src/extension.js",
+        "package": "node -e \"require('fs').mkdirSync('artifacts',{recursive:true})\" && vsce package --no-dependencies --out artifacts/"
     },
     "devDependencies": {
-        "@types/node": "^20.11.0",
         "@types/vscode": "^1.90.0",
         "@vscode/vsce": "^3.9.1",
-        "esbuild": "^0.20.2",
-        "eslint": "^9.0.0",
-        "tsx": "^4.7.0",
-        "typescript": "^5.4.0",
-        "typescript-eslint": "^8.0.0"
-    },
-    "dependencies": {
-        "fast-xml-parser": "^4.3.6"
+        "prettier": "^3.3.3"
     }
 }
