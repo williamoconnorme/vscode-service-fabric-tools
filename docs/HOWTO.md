@@ -132,7 +132,7 @@ Right-click menus follow the entity:
 
 | Entity | Actions |
 |---|---|
-| Cluster | **Open in Service Fabric Explorer**, **Show Details** (version, health, upgrade progress, load), **Show Health**, **Show Cluster Manifest**, **Show Diagnostic Events**, **Disconnect** |
+| Cluster | **Open in Service Fabric Explorer**, **Show Details** (version, health, upgrade progress, load), **Show Health**, **Show Cluster Manifest**, **Show Diagnostic Events**, **Disconnect**, **Remove Cluster** (also on disconnected clusters) |
 | Application type / version | **Show Details** (default parameters, service types), **Unprovision Application Type…** |
 | Application | **Attach Debugger to Deployed Service…**, **Auto-attach Debugger Next Deploy**, **Show Details**, **Show Health**, **Delete Application…** |
 | Upgrading application | **Show Upgrade Progress**, **Resume Upgrade (Next Upgrade Domain)** (also an inline button; for `UnmonitoredManual` upgrades waiting between domains), **Change Upgrade Mode…** (Monitored / UnmonitoredAuto / UnmonitoredManual), **Roll Back Upgrade…** |
@@ -834,6 +834,7 @@ All commands live under the **Service Fabric** category in the command palette.
 | Add Cluster… | `+` in the Clusters view title bar; asks local or remote, then adds the connection. |
 | Connect to Local Cluster / Connect to Remote Cluster… | Adds a connection. |
 | Disconnect | Removes a saved connection. |
+| Remove Cluster | Removes a saved connection, connected or not (trash icon on disconnected clusters). |
 | Change Client Certificate… | Picks a new X.509 client certificate for a cluster, checks the gateway accepts it, and saves it. See §7.2. |
 | Encrypt Value with Certificate… | Encrypts a value for `IsEncrypted` / `PasswordEncrypted` with the cluster's secrets certificate. See §4.5. |
 | Build and Push Container Images… | `docker build` + `docker push` (with `az acr login` for ACR) for container services. See §11.2.1. |

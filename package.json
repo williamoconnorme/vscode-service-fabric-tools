@@ -102,7 +102,13 @@
         "viewsWelcome": [
             {
                 "view": "serviceFabric.applications",
-                "contents": "No Service Fabric application projects (.sfproj) found in the current workspace.\n[Create New Application](command:serviceFabric.createApplication)\n[Open Folder](command:vscode.openFolder)\n[Open Help Guide](command:serviceFabric.openHelp)"
+                "contents": "Open a folder that contains a Service Fabric application project (.sfproj) in its workspace.\n[Open Folder](command:vscode.openFolder)",
+                "when": "workspaceFolderCount == 0"
+            },
+            {
+                "view": "serviceFabric.applications",
+                "contents": "No Service Fabric application projects (.sfproj) found in the current workspace.\n[Create New Application](command:serviceFabric.createApplication)",
+                "when": "workspaceFolderCount > 0"
             },
             {
                 "view": "serviceFabric.clusters",
@@ -187,6 +193,12 @@
                 "title": "Disconnect",
                 "category": "Service Fabric",
                 "icon": "$(debug-disconnect)"
+            },
+            {
+                "command": "serviceFabric.cluster.remove",
+                "title": "Remove Cluster",
+                "category": "Service Fabric",
+                "icon": "$(trash)"
             },
             {
                 "command": "serviceFabric.cluster.changeClientCertificate",
@@ -507,7 +519,7 @@
                 },
                 {
                     "command": "serviceFabric.createApplication",
-                    "when": "view == serviceFabric.applications",
+                    "when": "view == serviceFabric.applications && workspaceFolderCount > 0",
                     "group": "navigation"
                 },
                 {
@@ -596,6 +608,16 @@
                     "command": "serviceFabric.cluster.disconnect",
                     "when": "view == serviceFabric.clusters && viewItem == cluster.connected",
                     "group": "inline"
+                },
+                {
+                    "command": "serviceFabric.cluster.remove",
+                    "when": "view == serviceFabric.clusters && viewItem == cluster.disconnected",
+                    "group": "inline"
+                },
+                {
+                    "command": "serviceFabric.cluster.remove",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.(connected|disconnected)$/",
+                    "group": "9_remove@1"
                 },
                 {
                     "command": "serviceFabric.cluster.changeClientCertificate",

@@ -253,6 +253,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		['serviceFabric.cluster.connectLocal', () => connectLocalCluster(localCluster)],
 		['serviceFabric.cluster.connectRemote', () => connectRemoteCluster(connections, localCluster, logger)],
 		['serviceFabric.cluster.disconnect', (node?: ClusterTreeItem) => disconnectCluster(connections, node?.connection)],
+		['serviceFabric.cluster.remove', (node?: ClusterTreeItem) => disconnectCluster(connections, node?.connection)],
 		[
 			'serviceFabric.cluster.changeClientCertificate',
 			(node?: Pick<ClusterTreeItem, 'connection'>) => changeClientCertificate(connections, localCluster, logger, node?.connection),

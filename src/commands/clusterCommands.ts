@@ -171,7 +171,7 @@ export async function reportClusterAuthFailure(err: unknown, connection: Cluster
 	return true;
 }
 
-/** `serviceFabric.cluster.disconnect`: removes the given (or active) connection. */
+/** `serviceFabric.cluster.disconnect` / `serviceFabric.cluster.remove`: removes the given (or active) connection. */
 export async function disconnectCluster(store: ConnectionStore, connection?: ClusterConnection): Promise<void> {
 	const target = connection ?? store.getActive();
 	if (target) await store.remove(target.id);
