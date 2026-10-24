@@ -24,18 +24,19 @@ function weave({ s, L, w, gap, nodeR }) {
 }
 
 function marketplaceSvg() {
-	const g = weave({ s: 30, L: 70, w: 15, gap: 7, nodeR: 13 });
-	const nodes = g.ends.map(([x, y]) => `<circle cx="${x}" cy="${y}" r="13"/>`).join('');
+	const g = weave({ s: 28, L: 80, w: 15, gap: 7, nodeR: 17 });
+	const nodes = g.ends.map(([x, y]) => `<circle cx="${x}" cy="${y}" r="17"/>`).join('');
 	return `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#1b8cf2"/>
-      <stop offset="1" stop-color="#0a3d8f"/>
+      <stop offset="0" stop-color="#2e3648"/>
+      <stop offset="1" stop-color="#141922"/>
     </linearGradient>
-    <radialGradient id="core" cx="0.5" cy="0.4" r="0.6">
-      <stop offset="0" stop-color="#b8fff0"/>
-      <stop offset="1" stop-color="#2fd3b0"/>
-    </radialGradient>
+    <!-- vertical in screen space despite the group's 45° rotation -->
+    <linearGradient id="node" x1="0" y1="0" x2="0" y2="1" gradientTransform="rotate(-45 0.5 0.5)">
+      <stop offset="0" stop-color="#ffab2e"/>
+      <stop offset="1" stop-color="#f07400"/>
+    </linearGradient>
     <mask id="hm" maskUnits="userSpaceOnUse" x="${-g.big}" y="${-g.big}" width="${2 * g.big}" height="${2 * g.big}">
       <rect x="${-g.big}" y="${-g.big}" width="${2 * g.big}" height="${2 * g.big}" fill="#fff"/>${g.hMask}
     </mask>
@@ -45,13 +46,12 @@ function marketplaceSvg() {
   </defs>
   <rect width="256" height="256" rx="52" fill="url(#bg)"/>
   <g transform="translate(128 128) rotate(45)">
-    <g stroke="#e9f4ff" stroke-width="15" stroke-linecap="round" fill="none">
+    <g stroke="#e07a10" stroke-width="15" stroke-linecap="butt" fill="none">
       <g mask="url(#hm)">${g.h}</g>
       <g mask="url(#vm)">${g.v}</g>
     </g>
-    <g fill="#ffffff">${nodes}</g>
-    <circle r="20" fill="#0a3d8f" opacity="0.35"/>
-    <circle r="15" fill="url(#core)"/>
+    <g fill="url(#node)">${nodes}</g>
+    <circle r="12" fill="#fff1dc"/>
   </g>
 </svg>
 `;
@@ -85,8 +85,8 @@ fs.mkdirSync(outDir, { recursive: true });
 const write = (name, svg) => fs.writeFileSync(path.join(outDir, name), svg);
 write('icon.svg', marketplaceSvg());
 write('activitybar.svg', glyphSvg('#c5c5c5'));
-write('sfproj-light.svg', glyphSvg('#0a5bbf'));
-write('sfproj-dark.svg', glyphSvg('#5fb0ff'));
+write('sfproj-light.svg', glyphSvg('#d96a00'));
+write('sfproj-dark.svg', glyphSvg('#ffa33a'));
 const png = new Resvg(marketplaceSvg(), { fitTo: { mode: 'width', value: 256 } }).render().asPng();
 fs.writeFileSync(path.join(outDir, 'icon.png'), png);
 // previews for review
