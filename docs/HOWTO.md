@@ -330,13 +330,43 @@ The status-bar item, **Service Fabric: Select Active Cluster**, and the **Cluste
 ### 8.1 Publish
 
 1. Right-click a `.sfproj` → **Publish Application…**, or run **Service Fabric: Publish Application…** from the command palette.
-2. Pick a publish profile from `PublishProfiles\\*.xml`.
+2. Pick a publish profile from `PublishProfiles\\*.xml`, or one of your saved clusters (see *Publishing to a saved cluster* below). With a single profile and no saved clusters, the profile is used without asking.
 3. The extension restores, packages, and then deploys with the engine chosen by **`serviceFabric.deploy.engine`**:
    - **PowerShell** (default on Windows): invokes `Deploy-FabricApplication.ps1` from the project's `Scripts` folder, exactly as Visual Studio does.
    - **REST** (default on macOS / Linux; opt-in on Windows with `"rest"`): uploads, provisions and creates/upgrades the application over the HTTP gateway. See §8.4.
 4. Output streams live to the **Service Fabric** output channel. Errors are surfaced as a toast.
 
 The connection sent to the script matches the active cluster — for local clusters it's a no-creds call; for remote clusters it includes the server thumbprint and (if supplied) client thumbprint.
+
+**Publishing to a saved cluster.** The picker also lists the clusters in the **Clusters** view, with the active one first. Choosing one deploys to it using its saved security settings: trusted server certificate, client certificate, or Microsoft Entra ID sign-in.
+
+- It always uses the **REST engine**, on Windows too, because `Deploy-FabricApplication.ps1` needs a profile.
+- You pick an `ApplicationParameters\*.xml` file, or *None* for the manifest defaults. `Cloud.xml` is suggested for remote clusters and `Local.1Node.xml` for the local one. The `StartupServiceParameters` file with the same name is used with it.
+- Without a profile there is no `<UpgradeDeployment>` block. An existing application is upgraded with **`serviceFabric.deploy.upgradeMode`** (`Monitored` by default, with rollback on failure; also `UnmonitoredAuto`, `UnmonitoredManual`). Set it to `Disabled` to replace the application according to **`serviceFabric.deploy.overwriteBehavior`** instead (see §8.4).
+
+After a successful publish to a cluster that none of the project's profiles point at, a notification offers **Save…** a publish profile for it (or **Don't Ask Again for This Cluster**). You can also right-click a cluster → **Create Publish Profile from Cluster…** at any time.
+
+The generated profile:
+
+- uses the client connection endpoint Visual Studio expects (`host:19000`);
+- marks Entra ID clusters with `AzureActiveDirectory="true"`;
+- references a client certificate by thumbprint (`FindByThumbprint` in `CurrentUser\My`);
+- pairs the parameter files you picked;
+- upgrades existing applications (`<UpgradeDeployment Mode="Monitored" Enabled="true">`), matching what publishing to the saved cluster does.
+
+It never contains secrets: no passphrases, tokens or certificate file paths. A gateway that isn't on port 19080 (or an https gateway with no client credentials) is written as its URL, with a comment that Visual Studio and `Deploy-FabricApplication.ps1` need the client endpoint instead. The new file is added to the `.sfproj` so Visual Studio shows it.
+
+**Upgrades and automatic version bumping.** An existing application is upgraded in place when the publish profile has `<UpgradeDeployment Enabled="true">`, or, for a saved cluster, when `serviceFabric.deploy.upgradeMode` isn't `Disabled`. Service Fabric only upgrades to a new `ApplicationTypeVersion`, and it rejects a package whose content changed while its version didn't. Before such an upgrade, Publish checks the cluster:
+
+- If the cluster already runs the version being published, a prompt offers **Bump Versions and Upgrade**, or **Redeploy Anyway** (remove and recreate, per `overwriteBehavior`).
+- If you raised the application version but left a changed package at its old version, it offers to bump those packages (**Publish As Is** skips that).
+
+Bumping raises the last number of each version (`1.0.0` → `1.0.1`):
+
+- every code / config / data package whose files changed since the **last successful publish to that cluster**, plus its service manifest (also when only the manifest itself changed);
+- the `ServiceManifestVersion` references and the `ApplicationTypeVersion`.
+
+Versions you raised by hand are kept. The new versions are written to the source manifests and to the built package, so no repackaging is needed; commit them with your change. Publish records the package's content hashes per project and cluster after every successful publish. Without that record (the first publish from this workspace, or a cluster that was upgraded elsewhere), every service is bumped and restarts. Set **`serviceFabric.deploy.autoBumpVersions`** to `always` to bump without asking, or `never` to turn this off.
 
 **Pre-flight cluster probe.** Before invoking the deploy script the extension hits the publish profile's HTTP gateway (`/$/GetClusterHealth`). If the gateway doesn't respond and the profile is local, a modal lets you **Start Local Cluster** (auto-runs `DevClusterSetup.ps1`) or **Continue Anyway**; remote profiles get **Continue Anyway** only. This avoids the SDK's misleading `"Cluster connection instance is null"` error when the cluster simply isn't running.
 
@@ -743,6 +773,8 @@ Idempotent — running it twice is safe; the second run reports zero consumers u
 | `serviceFabric.deploy.promptForApplicationParameters` | `false` | When `true`, Publish asks which `ApplicationParameters\<env>.xml` to splat over the profile's defaults. When `false` (default), Publish uses the file paired with the publish profile via its `<ApplicationParameterFile>` element — a 5-node profile automatically pulls the 5-node parameters. See §8.1. |
 | `serviceFabric.deploy.engine` | `auto` | `auto` (PowerShell on Windows, REST elsewhere), `powershell` (Windows only), or `rest` (HTTP gateway, no SDK). See §8.1 / §8.4. |
 | `serviceFabric.deploy.overwriteBehavior` | `SameAppTypeAndVersion` | REST engine: what Publish does when the application exists and isn't being upgraded. `SameAppTypeAndVersion` replaces it only at the same version, `Always` replaces it whenever, `Never` fails. The PowerShell engine keeps the behavior of `Deploy-FabricApplication.ps1`. |
+| `serviceFabric.deploy.autoBumpVersions` | `prompt` | `prompt` / `always` / `never`. Before an upgrade, raise the versions of changed packages, their service manifests and the application type when needed. See §8.1. |
+| `serviceFabric.deploy.upgradeMode` | `Monitored` | Upgrade mode for publishes to a saved cluster (no profile): `Monitored`, `UnmonitoredAuto`, `UnmonitoredManual`, or `Disabled` to replace instead. See §8.1. |
 | `serviceFabric.deploy.copyPackageTimeoutSec` | `600` | REST engine: overall time limit for the image-store upload. The profile's `CopyPackageTimeoutSec` takes precedence. |
 | `serviceFabric.remove.waitSeconds` | `30` | Maximum seconds to wait for the cluster to finish tearing down application instances of a type before unregistering it. `Remove-ServiceFabricApplication` is async — unregistering too soon produces *"Application type and version is still in use"*. Set to `0` to skip the wait (and accept the unregister may fail); raise it for slow remote clusters. See §8.2. |
 | `serviceFabric.xmlSchemaPath` | `""` | Service Fabric XSD for completion, hover and validation. Folder containing `ServiceFabricServiceModel.xsd`, or a direct `.xsd` file. Empty tries the standard SDK install locations and `~/.servicefabric/schemas`, then the bundled schema. See §4.1. |
@@ -763,11 +795,12 @@ All commands live under the **Service Fabric** category in the command palette.
 | Open Help Guide | Opens this document in a side-by-side preview. |
 | Refresh / Refresh Clusters | Re-scans the workspace / re-probes every saved cluster connection. |
 | Build / Rebuild / Clean / Package Application | MSBuild target on the selected `.sfproj`. |
-| Publish Application… / Remove Application | Deploys / removes through the SDK scripts (PowerShell engine) or the HTTP gateway (REST engine). See §8. |
+| Publish Application… / Remove Application | Deploys / removes through the SDK scripts (PowerShell engine) or the HTTP gateway (REST engine). Publish can also target a saved cluster directly. See §8. |
 | Add Cluster… | `+` in the Clusters view title bar; asks local or remote, then adds the connection. |
 | Connect to Local Cluster / Connect to Remote Cluster… | Adds a connection. |
 | Disconnect | Removes a saved connection. |
 | Change Client Certificate… | Picks a new X.509 client certificate for a cluster, checks the gateway accepts it, and saves it. See §7.2. |
+| Create Publish Profile from Cluster… | Writes a `PublishProfiles\*.xml` for a saved cluster (endpoint, certificate thumbprints or Entra ID flag, paired parameter files) and adds it to the `.sfproj`. See §8.1. |
 | Select Active Cluster | Picks which connection drives deploy/attach/events. |
 | Start / Stop / Reset Local Cluster | Local SDK cluster lifecycle (Windows only). |
 | Switch Local Cluster Mode (1-node ↔ 5-node)… | Reset + recreate at the chosen size. |

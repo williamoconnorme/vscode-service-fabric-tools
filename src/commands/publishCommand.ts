@@ -24,18 +24,22 @@ import {
 	parsePublishProfile,
 	resolveApplicationName,
 	type PublishProfileSummary,
+	type PublishProfileUpgrade,
 } from '../deploy/deployScript';
 import { resolveDeployEngine, type DeployEngine } from '../deploy/deployEngine';
 import { DeployCancelledError, deployViaRest, type OverwriteBehavior } from '../deploy/restDeploy';
 import { parseStartupServiceParameterFile, parseStartupServices, type StartupServiceSpec } from '../deploy/startupServices';
 import { runPowerShell } from '../cluster/powerShellRunner';
 import { SfAuthError, type SfRestClient } from '../cluster/sfRestClient';
-import { configureClusterSecurity, createClusterClient, getEntraAccessToken, securityOf } from '../cluster/clusterAuth';
+import { configureClusterSecurity, createClientForConnection, createClusterClient, getEntraAccessToken, securityOf } from '../cluster/clusterAuth';
 import type { ClusterConnection, ConnectionStore } from '../cluster/connectionStore';
 import type { ApplicationProject } from '../project/sfprojModel';
 import type { LocalClusterManager } from '../cluster/localCluster';
 import type { AutoAttachTelemetry } from '../debug/autoAttachState';
 import type { Logger } from '../util/logger';
+import { reportClusterAuthFailure } from './clusterCommands';
+import { offerToSavePublishProfile, pickParameterFilesForCluster } from './publishProfileCommands';
+import { bumpVersionsBeforeUpgrade, savePublishBaseline } from './versionBumpFlow';
 
 /** Absolute paths of the parameter files a publish profile pairs with. */
 interface ProfileParameterFiles {
@@ -67,19 +71,34 @@ export async function publishApplication(
 		vscode.workspace.getConfiguration('serviceFabric').get<string>('deploy.engine'),
 		process.platform,
 	);
-	if ('error' in engineChoice) {
+	const project = await resolveTargetProject(watcher, target);
+	if (!project) return;
+	const publishTarget = await pickPublishTarget(project.publishProfiles, connections);
+	if (!publishTarget) return;
+	// A saved cluster has no profile for Deploy-FabricApplication.ps1, so it always deploys over REST.
+	const cluster = publishTarget.kind === 'cluster' ? publishTarget.connection : undefined;
+	const publishProfile = publishTarget.kind === 'profile' ? publishTarget.path : undefined;
+	if (!cluster && 'error' in engineChoice) {
 		vscode.window.showErrorMessage(engineChoice.error);
 		return;
 	}
-	const engine = engineChoice.engine;
-	const project = await resolveTargetProject(watcher, target);
-	if (!project) return;
-	const publishProfile = await pickPublishProfile(project.publishProfiles);
-	if (!publishProfile) return;
-	const pairedFiles = await validatePublishProfileParameterFiles(publishProfile, logger);
-	const appParamFile = await pickApplicationParameterFile(project.applicationParameters, pairedFiles.applicationParameterFileAbs);
+	const engine: DeployEngine = cluster || 'error' in engineChoice ? 'rest' : engineChoice.engine;
+	let pairedFiles: ProfileParameterFiles;
+	let appParamFile: string | undefined;
+	if (cluster) {
+		const files = await pickParameterFilesForCluster(project, cluster);
+		if (!files) return;
+		pairedFiles = files;
+	} else {
+		pairedFiles = await validatePublishProfileParameterFiles(publishProfile!, logger);
+		appParamFile = await pickApplicationParameterFile(project.applicationParameters, pairedFiles.applicationParameterFileAbs);
+	}
 
 	logger.show();
+	if (cluster) {
+		const params = pairedFiles.applicationParameterFileAbs ? path.basename(pairedFiles.applicationParameterFileAbs) : 'manifest defaults';
+		logger.info(`Publishing to saved cluster ${cluster.label} (${cluster.endpoint}) with ${params}.`);
+	}
 	logger.info(`Deploy engine: ${engine === 'rest' ? 'REST (HTTP gateway)' : 'PowerShell (Deploy-FabricApplication.ps1)'}.`);
 	logger.info('Restoring NuGet packages...');
 	const restore = await vscode.window.withProgress(
@@ -258,7 +277,9 @@ Continuing will publish the wrong application. This choice is not remembered.`,
 			return;
 		}
 	}
-	const preflight = await ensureClusterReachableForDeploy(publishProfile, localCluster, logger, engine, connections);
+	const preflight = cluster
+		? await ensureSavedClusterReachable(cluster, logger)
+		: await ensureClusterReachableForDeploy(publishProfile!, localCluster, logger, engine, connections);
 	if (!preflight) return;
 	const applicationTypeName = project.applicationManifest?.applicationTypeName;
 	const applicationName = applicationTypeName
@@ -267,22 +288,48 @@ Continuing will publish the wrong application. This choice is not remembered.`,
 				(await readOptional(pairedFiles.applicationParameterFileAbs)) ?? (await readOptional(appParamFile)),
 			)
 		: undefined;
+	// Saved clusters have no profile: their upgrade settings come from serviceFabric.deploy.upgradeMode.
+	const clusterUpgrade = cluster ? clusterUpgradeSettings() : undefined;
+	const profileXml = publishProfile ? await readOptional(publishProfile) : undefined;
+	const upgradeEnabled = cluster ? clusterUpgrade !== undefined : Boolean(profileXml && parsePublishProfile(profileXml).upgrade?.enabled);
+	const proceed = await bumpVersionsBeforeUpgrade({
+		project,
+		packagePath,
+		client: preflight.client,
+		applicationName,
+		upgradeEnabled,
+		memento: workspaceState,
+		logger,
+	});
+	if (!proceed) return;
 	const deployed =
 		engine === 'powershell'
 			? await deployViaPowerShell(
 					project,
 					deployScript!,
 					packagePath,
-					publishProfile,
+					publishProfile!,
 					applicationParameter,
 					preflight.securityToken,
 					logger,
 				)
-			: await deployViaRestEngine(project, packagePath, publishProfile, pairedFiles, applicationParameter, preflight.client, logger);
+			: await deployViaRestEngine(
+					project,
+					packagePath,
+					publishProfile,
+					pairedFiles,
+					applicationParameter,
+					preflight.client,
+					logger,
+					clusterUpgrade,
+				);
 	if (!deployed) return;
+	await savePublishBaseline(project, packagePath, preflight.client.endpoint, workspaceState, logger);
 	vscode.window.showInformationMessage('Service Fabric deployment completed successfully.');
-	const active = connections.getActive();
+	const active = cluster ?? connections.getActive();
 	if (active) await localCluster.refresh(active, { interactive: true });
+	// Not awaited: the offer is a notification and shouldn't hold up auto-attach.
+	if (cluster) void offerToSavePublishProfile(project, cluster, pairedFiles, workspaceState, logger);
 	if (active && workspaceState && telemetry && applicationTypeName && applicationName) {
 		try {
 			const { maybeAutoAttachAfterDeploy } = await import('../debug/autoAttachAfterDeploy');
@@ -362,11 +409,13 @@ function logStartupServicesMode(project: ApplicationProject, logger: Logger): vo
 async function deployViaRestEngine(
 	project: ApplicationProject,
 	packagePath: string,
-	publishProfile: string,
+	publishProfile: string | undefined,
 	pairedFiles: ProfileParameterFiles,
 	applicationParameter: Record<string, string> | undefined,
 	client: SfRestClient,
 	logger: Logger,
+	/** Upgrade settings when there is no publish profile (saved-cluster publishes). */
+	upgradeWithoutProfile?: PublishProfileUpgrade,
 ): Promise<boolean> {
 	const fail = (message: string): false => {
 		logger.error(message);
@@ -422,7 +471,7 @@ async function deployViaRestEngine(
 						startupServices,
 						profile: {
 							overwriteBehavior,
-							upgrade: profile?.upgrade,
+							upgrade: profile ? profile.upgrade : upgradeWithoutProfile,
 							copyPackageTimeoutSec: profile?.copyPackageTimeoutSec ?? config.get<number>('deploy.copyPackageTimeoutSec') ?? 600,
 							compressPackage: profile?.compressPackage,
 							registerApplicationTypeTimeoutSec: profile?.registerApplicationTypeTimeoutSec,
@@ -442,6 +491,13 @@ async function deployViaRestEngine(
 		}
 		return fail((err as Error).message);
 	}
+}
+
+/** Upgrade settings for saved-cluster publishes, from `serviceFabric.deploy.upgradeMode`; `undefined` when disabled. */
+function clusterUpgradeSettings(): PublishProfileUpgrade | undefined {
+	const mode = vscode.workspace.getConfiguration('serviceFabric').get<string>('deploy.upgradeMode') ?? 'Monitored';
+	if (mode !== 'Monitored' && mode !== 'UnmonitoredAuto' && mode !== 'UnmonitoredManual') return undefined;
+	return { enabled: true, mode, parameters: mode === 'Monitored' ? { FailureAction: 'Rollback' } : {} };
 }
 
 async function readOptional(file: string | undefined): Promise<string | undefined> {
@@ -552,7 +608,29 @@ async function ensureClusterReachableForDeploy(
 			return proceed ? { securityToken, client } : undefined;
 		}
 	}
-	if (profile.isLocal) {
+	return handleUnreachableCluster(
+		client,
+		gateway,
+		profile.isLocal,
+		securityToken,
+		"Verify the publish profile's ClusterConnectionParameters and certificate settings.",
+		logger,
+	);
+}
+
+/**
+ * After a failed probe: a local cluster gets a "Start Local Cluster" offer, and
+ * any cluster can be force-continued. Returns `undefined` to abort the deploy.
+ */
+async function handleUnreachableCluster(
+	client: SfRestClient,
+	gateway: string,
+	isLocal: boolean,
+	securityToken: string | undefined,
+	remoteHint: string,
+	logger: Logger,
+): Promise<{ securityToken?: string; client: SfRestClient } | undefined> {
+	if (isLocal) {
 		const choice = await vscode.window.showErrorMessage(
 			`Local Service Fabric cluster at ${gateway} isn't responding. The deploy script needs an active cluster connection.`,
 			{ modal: true },
@@ -577,7 +655,7 @@ async function ensureClusterReachableForDeploy(
 		return undefined;
 	}
 	return (await vscode.window.showErrorMessage(
-		`Service Fabric cluster at ${gateway} isn't responding. Verify the publish profile's ClusterConnectionParameters and certificate settings.`,
+		`Service Fabric cluster at ${gateway} isn't responding. ${remoteHint}`,
 		{ modal: true },
 		'Continue Anyway',
 	)) === 'Continue Anyway'
@@ -585,18 +663,72 @@ async function ensureClusterReachableForDeploy(
 		: undefined;
 }
 
-/** The only profile when there is one; otherwise a QuickPick. */
-async function pickPublishProfile(profiles: string[]): Promise<string | undefined> {
-	if (profiles.length === 0) {
-		vscode.window.showErrorMessage('No publish profiles found under PublishProfiles/.');
+/**
+ * Pre-flight for publishing to a saved cluster: builds a client from the
+ * connection's saved security settings (signing in or asking for a certificate
+ * passphrase if needed) and probes the gateway.
+ */
+async function ensureSavedClusterReachable(
+	conn: ClusterConnection,
+	logger: Logger,
+): Promise<{ securityToken?: string; client: SfRestClient } | undefined> {
+	const client = createClientForConnection(conn, { interactive: true });
+	logger.info(`Probing cluster gateway ${conn.endpoint}...`);
+	try {
+		await client.getClusterHealth(5000);
+		logger.info('Cluster probe ok.');
+		return { client };
+	} catch (err) {
+		logger.warn(`Cluster probe failed: ${(err as Error).message}`);
+		if (await reportClusterAuthFailure(err, conn)) return undefined;
+	}
+	return handleUnreachableCluster(
+		client,
+		conn.endpoint,
+		conn.kind === 'local',
+		undefined,
+		'Check the connection in the Clusters view.',
+		logger,
+	);
+}
+
+type PublishTarget = { kind: 'profile'; path: string } | { kind: 'cluster'; connection: ClusterConnection };
+
+/**
+ * Publish profiles and saved clusters in one QuickPick, the active cluster
+ * first. With no saved clusters and a single profile, that profile is used
+ * without asking.
+ */
+async function pickPublishTarget(profiles: string[], connections: ConnectionStore): Promise<PublishTarget | undefined> {
+	const clusters = connections.list();
+	if (profiles.length === 0 && clusters.length === 0) {
+		vscode.window.showErrorMessage(
+			'Nothing to publish to: there are no publish profiles under PublishProfiles/ and no saved clusters. Add a cluster in the Clusters view, or add a publish profile.',
+		);
 		return undefined;
 	}
-	if (profiles.length === 1) return profiles[0];
-	const picked = await vscode.window.showQuickPick(
-		profiles.map((p) => ({ label: path.basename(p), description: p, value: p })),
-		{ placeHolder: 'Select a publish profile' },
-	);
-	return picked?.value;
+	if (clusters.length === 0 && profiles.length === 1) return { kind: 'profile', path: profiles[0] };
+	const active = connections.getActive();
+	const ordered = active ? [active, ...clusters.filter((c) => c.id !== active.id)] : clusters;
+	type Item = vscode.QuickPickItem & { target?: PublishTarget };
+	const items: Item[] = [];
+	if (profiles.length > 0) {
+		items.push({ label: 'Publish profiles', kind: vscode.QuickPickItemKind.Separator });
+		for (const p of profiles) items.push({ label: `$(file) ${path.basename(p)}`, description: p, target: { kind: 'profile', path: p } });
+	}
+	if (ordered.length > 0) {
+		items.push({ label: 'Saved clusters', kind: vscode.QuickPickItemKind.Separator });
+		for (const c of ordered) {
+			items.push({
+				label: `$(server) ${c.label}`,
+				description: c.endpoint,
+				detail: c.id === active?.id ? 'Active cluster · deploys over the HTTP gateway' : 'Deploys over the HTTP gateway',
+				target: { kind: 'cluster', connection: c },
+			});
+		}
+	}
+	const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Publish to a publish profile or a saved cluster' });
+	return picked?.target;
 }
 
 /**

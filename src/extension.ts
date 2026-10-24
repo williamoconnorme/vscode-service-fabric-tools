@@ -25,6 +25,7 @@ import { ServiceFabricTaskProvider } from './build/sfTaskProvider';
 import { resolveTargetProject, runBuildTarget } from './commands/buildCommands';
 import { ensureNugetRestored } from './build/nugetRestore';
 import { publishApplication } from './commands/publishCommand';
+import { createPublishProfileFromCluster } from './commands/publishProfileCommands';
 import { removeApplication } from './commands/removeCommand';
 import {
 	addCluster,
@@ -253,6 +254,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		[
 			'serviceFabric.cluster.changeClientCertificate',
 			(node?: Pick<ClusterTreeItem, 'connection'>) => changeClientCertificate(connections, localCluster, logger, node?.connection),
+		],
+		[
+			'serviceFabric.cluster.createPublishProfile',
+			(node?: Pick<ClusterTreeItem, 'connection'>) => createPublishProfileFromCluster(projects, connections, logger, node?.connection),
 		],
 		['serviceFabric.cluster.selectActive', () => selectActiveCluster(connections)],
 		['serviceFabric.cluster.startLocal', () => startLocalCluster(logger)],

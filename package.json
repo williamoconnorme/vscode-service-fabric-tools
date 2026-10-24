@@ -177,6 +177,11 @@
                 "category": "Service Fabric"
             },
             {
+                "command": "serviceFabric.cluster.createPublishProfile",
+                "title": "Create Publish Profile from Cluster…",
+                "category": "Service Fabric"
+            },
+            {
                 "command": "serviceFabric.cluster.selectActive",
                 "title": "Select Active Cluster",
                 "category": "Service Fabric"
@@ -543,6 +548,11 @@
                     "command": "serviceFabric.cluster.changeClientCertificate",
                     "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.(connected|disconnected)$/",
                     "group": "5_connection@1"
+                },
+                {
+                    "command": "serviceFabric.cluster.createPublishProfile",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.(connected|disconnected)$/ && serviceFabric.hasProject",
+                    "group": "5_connection@2"
                 },
                 {
                     "command": "serviceFabric.cluster.refreshNode",
@@ -1155,6 +1165,38 @@
                     ],
                     "default": "SameAppTypeAndVersion",
                     "markdownDescription": "REST engine only: what Publish does when the application already exists and isn't being upgraded (the `-OverwriteBehavior` of `Publish-NewServiceFabricApplication`). The PowerShell engine keeps the behavior of the project's `Deploy-FabricApplication.ps1`."
+                },
+                "serviceFabric.deploy.autoBumpVersions": {
+                    "type": "string",
+                    "enum": [
+                        "prompt",
+                        "always",
+                        "never"
+                    ],
+                    "enumDescriptions": [
+                        "Ask before raising versions.",
+                        "Raise versions without asking.",
+                        "Never raise versions; publish the manifests as they are."
+                    ],
+                    "default": "prompt",
+                    "markdownDescription": "When Publish upgrades an existing application (publish profile with `<UpgradeDeployment Enabled=\"true\">`, or a saved cluster with `#serviceFabric.deploy.upgradeMode#` on) and the cluster already runs the version being published, or packages changed without a version bump: raise the application type version and the versions of the changed code / config / data packages and their service manifests. Changes are detected against the package published last time to the same cluster; without that record every service is bumped. Versions are written to the source manifests and the built package."
+                },
+                "serviceFabric.deploy.upgradeMode": {
+                    "type": "string",
+                    "enum": [
+                        "Monitored",
+                        "UnmonitoredAuto",
+                        "UnmonitoredManual",
+                        "Disabled"
+                    ],
+                    "enumDescriptions": [
+                        "Rolling upgrade with health checks; rolls back on failure.",
+                        "Rolling upgrade without health checks.",
+                        "Rolling upgrade that waits for you to move to each upgrade domain.",
+                        "Don't upgrade: an existing application is replaced according to serviceFabric.deploy.overwriteBehavior."
+                    ],
+                    "default": "Monitored",
+                    "markdownDescription": "How Publish upgrades an existing application when publishing to a saved cluster (no publish profile). Publish profiles use their own `<UpgradeDeployment>` block."
                 },
                 "serviceFabric.deploy.copyPackageTimeoutSec": {
                     "type": "integer",
