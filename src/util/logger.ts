@@ -21,20 +21,20 @@ export class Logger {
 
 	error(message: string, err?: unknown): void {
 		if (this.level >= LEVEL_RANK.error) {
-			this.channel.appendLine(`[error] ${message}${err ? ' :: ' + formatError(err) : ''}`);
+			this.channel.appendLine(`${timestamp()} [error] ${message}${err ? ' :: ' + formatError(err) : ''}`);
 		}
 	}
 
 	warn(message: string): void {
-		if (this.level >= LEVEL_RANK.warn) this.channel.appendLine(`[warn] ${message}`);
+		if (this.level >= LEVEL_RANK.warn) this.channel.appendLine(`${timestamp()} [warn] ${message}`);
 	}
 
 	info(message: string): void {
-		if (this.level >= LEVEL_RANK.info) this.channel.appendLine(`[info] ${message}`);
+		if (this.level >= LEVEL_RANK.info) this.channel.appendLine(`${timestamp()} [info] ${message}`);
 	}
 
 	debug(message: string): void {
-		if (this.level >= LEVEL_RANK.debug) this.channel.appendLine(`[debug] ${message}`);
+		if (this.level >= LEVEL_RANK.debug) this.channel.appendLine(`${timestamp()} [debug] ${message}`);
 	}
 
 	show(): void {
@@ -51,6 +51,13 @@ export class Logger {
 	}
 }
 
+/** Local time as `YYYY-MM-DD HH:mm:ss.SSS`, the format VS Code's own log channels use. */
+function timestamp(): string {
+	const d = new Date();
+	const pad = (n: number, w = 2) => String(n).padStart(w, '0');
+	return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+}
+
 function formatError(err: unknown): string {
 	if (err instanceof Error)
 		return `${err.message}
@@ -63,7 +70,8 @@ ${err.stack ?? ''}`;
 }
 
 export function createLogger(): { logger: Logger; channel: vscode.OutputChannel } {
-	const channel = vscode.window.createOutputChannel('Service Fabric');
+	// The `log` language colours levels, timestamps, URLs and GUIDs.
+	const channel = vscode.window.createOutputChannel('Service Fabric', 'log');
 	return {
 		logger: new Logger(channel),
 		channel,

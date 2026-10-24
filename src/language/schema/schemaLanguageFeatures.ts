@@ -28,22 +28,28 @@ export const SCHEMA_SELECTOR: vscode.DocumentFilter[] = [
  * installed SDK when there is one (so a newer SDK's additions show up), else
  * the model bundled with the extension.
  */
-export function loadSchemaModel(logger: Logger): SchemaModel {
+export function loadSchemaModel(logger: Logger): { model: SchemaModel; xsdPath?: string } {
 	const override = vscode.workspace.getConfiguration('serviceFabric').get<string>('xmlSchemaPath') ?? '';
 	const xsdPath = findServiceFabricSchema({ override });
 	if (xsdPath) {
 		try {
 			const model = compileXsd(nodeFs.readFileSync(xsdPath, 'utf8'));
 			logger.info(`Manifest IntelliSense uses the Service Fabric XSD at ${xsdPath}.`);
-			return model;
+			return { model, xsdPath };
 		} catch (err) {
 			logger.warn(`Couldn't read ${xsdPath} (${(err as Error).message}); using the bundled Service Fabric schema.`);
 		}
 	} else if (override.trim()) {
 		logger.warn(`serviceFabric.xmlSchemaPath "${override}" has no ServiceFabricServiceModel.xsd; using the bundled Service Fabric schema.`);
 	}
-	return bundledSchema as unknown as SchemaModel;
+	return { model: bundledSchema as unknown as SchemaModel };
 }
+
+/** Service Fabric XML files the language status item shows on. */
+const STATUS_SELECTOR: vscode.DocumentFilter[] = [
+	{ language: 'xml', pattern: '**/{ApplicationManifest,ServiceManifest,StartupServices,ClusterManifest*}.xml' },
+	{ language: 'xml', pattern: '**/{ApplicationParameters,PublishProfiles,StartupServiceParameters}/*.xml' },
+];
 
 /** Escapes text for a snippet body (`\$}`) and, inside a `${1|a,b|}` choice, `,|` as well. */
 function snippetEscape(s: string, inChoice = false): string {
@@ -73,13 +79,19 @@ function attributeMarkdown(a: SchemaAttribute): vscode.MarkdownString {
  */
 export class SchemaLanguageFeatures implements vscode.CompletionItemProvider, vscode.HoverProvider, vscode.Disposable {
 	private model: SchemaModel;
+	/** XSD the model came from; `undefined` for the bundled model. */
+	private xsdPath: string | undefined;
 	private enabled = true;
+	/** Language status item for Service Fabric XML files: which schema is in use, and whether validation runs. */
+	private readonly status = vscode.languages.createLanguageStatusItem('serviceFabric.schema', STATUS_SELECTOR);
 	private readonly collection = vscode.languages.createDiagnosticCollection('serviceFabric.schema');
 	private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
-	private readonly disposables: vscode.Disposable[] = [this.collection];
+	private readonly disposables: vscode.Disposable[] = [this.collection, this.status];
 
 	constructor(private readonly logger: Logger) {
-		this.model = loadSchemaModel(logger);
+		({ model: this.model, xsdPath: this.xsdPath } = loadSchemaModel(logger));
+		this.status.name = 'Service Fabric schema';
+		this.updateStatus();
 		this.disposables.push(
 			vscode.languages.registerCompletionItemProvider(SCHEMA_SELECTOR, this, '<', ' ', '"', '/'),
 			vscode.languages.registerHoverProvider(SCHEMA_SELECTOR, this),
@@ -91,7 +103,8 @@ export class SchemaLanguageFeatures implements vscode.CompletionItemProvider, vs
 			}),
 			vscode.workspace.onDidChangeConfiguration((e) => {
 				if (e.affectsConfiguration('serviceFabric.xmlSchemaPath')) {
-					this.model = loadSchemaModel(this.logger);
+					({ model: this.model, xsdPath: this.xsdPath } = loadSchemaModel(this.logger));
+					this.updateStatus();
 					this.validateAll();
 				}
 			}),
@@ -101,8 +114,21 @@ export class SchemaLanguageFeatures implements vscode.CompletionItemProvider, vs
 
 	setEnabled(enabled: boolean): void {
 		this.enabled = enabled;
+		this.updateStatus();
 		if (enabled) this.validateAll();
 		else this.collection.clear();
+	}
+
+	/** Shows which schema IntelliSense uses and whether validation runs; the link opens the settings. */
+	private updateStatus(): void {
+		this.status.text = this.xsdPath ? '$(file-code) SF schema: SDK' : '$(file-code) SF schema: bundled';
+		this.status.detail = [this.xsdPath ?? 'bundled with the extension', this.enabled ? 'validation on' : 'validation off'].join(' · ');
+		this.status.severity = this.enabled ? vscode.LanguageStatusSeverity.Information : vscode.LanguageStatusSeverity.Warning;
+		this.status.command = {
+			title: 'Configure',
+			command: 'workbench.action.openSettings',
+			arguments: ['serviceFabric.xmlSchemaPath serviceFabric.diagnostics.enableSchemaValidation'],
+		};
 	}
 
 	// ---- diagnostics ----------------------------------------------------------

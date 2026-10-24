@@ -25,18 +25,27 @@ export class ClusterDocumentProvider implements vscode.TextDocumentContentProvid
 
 	/** Opens `content` in a new read-only editor titled `title` with the given language. */
 	async show(title: string, content: string, language: 'json' | 'xml' | 'log'): Promise<void> {
-		const ext = language === 'log' ? 'log' : language;
+		const doc = await vscode.workspace.openTextDocument(this.store(title, content, language));
+		await vscode.languages.setTextDocumentLanguage(doc, language);
+		await vscode.window.showTextDocument(doc, { preview: false });
+	}
+
+	/** Opens a diff of `content` (left, read-only) against a workspace file (right). */
+	async showDiff(title: string, content: string, file: vscode.Uri): Promise<void> {
+		await vscode.commands.executeCommand('vscode.diff', this.store(title, content, 'xml'), file, title);
+	}
+
+	/** Keeps `content` under a fresh URI and returns it. */
+	private store(title: string, content: string, language: 'json' | 'xml' | 'log'): vscode.Uri {
 		const safeTitle = title.replace(/[\\/:*?"<>|]/g, '_');
-		const uri = vscode.Uri.from({ scheme: CLUSTER_DOCUMENT_SCHEME, path: `/${safeTitle}.${ext}`, query: `t=${Date.now()}` });
+		const uri = vscode.Uri.from({ scheme: CLUSTER_DOCUMENT_SCHEME, path: `/${safeTitle}.${language}`, query: `t=${Date.now()}` });
 		this.contents.set(uri.toString(), content);
 		while (this.contents.size > MAX_DOCUMENTS) {
 			const oldest = this.contents.keys().next().value;
 			if (oldest === undefined) break;
 			this.contents.delete(oldest);
 		}
-		const doc = await vscode.workspace.openTextDocument(uri);
-		await vscode.languages.setTextDocumentLanguage(doc, language);
-		await vscode.window.showTextDocument(doc, { preview: false });
+		return uri;
 	}
 
 	/** {@link show} for a JSON payload. */

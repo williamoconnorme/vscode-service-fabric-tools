@@ -29,9 +29,13 @@
         "msbuild"
     ],
     "main": "./dist/extension.js",
+    "extensionKind": [
+        "workspace"
+    ],
     "activationEvents": [
         "workspaceContains:**/*.sfproj",
-        "onCommand:serviceFabric.createApplication"
+        "onCommand:serviceFabric.createApplication",
+        "onUri"
     ],
     "capabilities": {
         "untrustedWorkspaces": {
@@ -553,6 +557,23 @@
                 "command": "serviceFabric.cluster.filter.sortDefault",
                 "title": "Clusters View: Sort by Default Order",
                 "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.compareWithDeployed",
+                "title": "Compare Manifest with Deployed Version",
+                "category": "Service Fabric",
+                "icon": "$(diff)"
+            },
+            {
+                "command": "serviceFabric.selectHintParameterFile",
+                "title": "Choose Parameter File for Inline Values…",
+                "category": "Service Fabric"
+            },
+            {
+                "command": "serviceFabric.showDeploymentHistory",
+                "title": "Show Deployment History",
+                "category": "Service Fabric",
+                "icon": "$(history)"
             }
         ],
         "keybindings": [
@@ -723,6 +744,11 @@
                     "group": "1_navigate@3"
                 },
                 {
+                    "command": "serviceFabric.showDeploymentHistory",
+                    "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.app(\\.upgrading)?$/",
+                    "group": "2_inspect@5"
+                },
+                {
                     "command": "serviceFabric.cluster.showDetails",
                     "when": "view == serviceFabric.clusters && viewItem =~ /^cluster\\.(?!message|disconnected|group\\.)/",
                     "group": "2_inspect@1"
@@ -863,6 +889,11 @@
                     "command": "serviceFabric.encryptSecret",
                     "when": "resourceLangId == xml && serviceFabric.hasProject",
                     "group": "9_serviceFabric@1"
+                },
+                {
+                    "command": "serviceFabric.compareWithDeployed",
+                    "when": "resourceFilename =~ /^(Application|Service)Manifest\\.xml$/ && serviceFabric.hasProject",
+                    "group": "9_serviceFabric@2"
                 }
             ],
             "explorer/context": [
@@ -1092,6 +1123,18 @@
                 {
                     "command": "serviceFabric.cluster.switchLocalMode",
                     "when": "isWindows"
+                },
+                {
+                    "command": "serviceFabric.compareWithDeployed",
+                    "when": "resourceFilename =~ /^(Application|Service)Manifest\\.xml$/ && serviceFabric.hasProject"
+                },
+                {
+                    "command": "serviceFabric.selectHintParameterFile",
+                    "when": "serviceFabric.hasProject"
+                },
+                {
+                    "command": "serviceFabric.showDeploymentHistory",
+                    "when": "serviceFabric.hasProject"
                 }
             ],
             "serviceFabric.clusters.filter": [
@@ -1586,6 +1629,141 @@
                 "id": "serviceFabric.clusters.filter",
                 "label": "Filter",
                 "icon": "$(filter)"
+            }
+        ],
+        "languageModelTools": [
+            {
+                "name": "servicefabric_listProjects",
+                "toolReferenceName": "sfProjects",
+                "displayName": "Service Fabric Projects",
+                "userDescription": "List the Service Fabric application projects in this workspace.",
+                "modelDescription": "Lists the Service Fabric application projects (.sfproj) in the open workspace: application type name and version, application parameters with defaults, service packages (version, manifest path, code packages, endpoints), parameter files and publish profiles. Use it to relate workspace code to what is deployed on a cluster.",
+                "canBeReferencedInPrompt": true,
+                "icon": "$(server-environment)",
+                "tags": [
+                    "service-fabric",
+                    "azure"
+                ],
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "servicefabric_listClusters",
+                "toolReferenceName": "sfClusters",
+                "displayName": "Service Fabric Clusters",
+                "userDescription": "List the saved Service Fabric clusters and their state.",
+                "modelDescription": "Lists the Service Fabric clusters saved in VS Code: label, HTTP gateway endpoint, local or remote, whether it is the active cluster, connection state (connected/disconnected/unreachable), last known health, node and application counts. Call this first to find a cluster label for the other Service Fabric tools.",
+                "canBeReferencedInPrompt": true,
+                "icon": "$(server-environment)",
+                "tags": [
+                    "service-fabric",
+                    "azure"
+                ],
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "servicefabric_getClusterHealth",
+                "toolReferenceName": "sfHealth",
+                "displayName": "Service Fabric Cluster Health",
+                "userDescription": "Get the health of a Service Fabric cluster.",
+                "modelDescription": "Returns the aggregated health of a Service Fabric cluster, the descriptions of its unhealthy evaluations (why it is Warning or Error), and the health of each node and application. Read-only.",
+                "canBeReferencedInPrompt": true,
+                "icon": "$(server-environment)",
+                "tags": [
+                    "service-fabric",
+                    "azure"
+                ],
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "cluster": {
+                            "type": "string",
+                            "description": "Label or HTTP gateway endpoint of a saved cluster (see servicefabric_listClusters). Omit to use the active cluster."
+                        }
+                    }
+                }
+            },
+            {
+                "name": "servicefabric_listApplications",
+                "toolReferenceName": "sfApps",
+                "displayName": "Service Fabric Applications",
+                "userDescription": "List applications and application types on a Service Fabric cluster.",
+                "modelDescription": "Lists the applications deployed on a Service Fabric cluster (fabric:/ name, type, version, status, health, application parameters) and the provisioned application types and versions. Read-only.",
+                "canBeReferencedInPrompt": true,
+                "icon": "$(server-environment)",
+                "tags": [
+                    "service-fabric",
+                    "azure"
+                ],
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "cluster": {
+                            "type": "string",
+                            "description": "Label or HTTP gateway endpoint of a saved cluster (see servicefabric_listClusters). Omit to use the active cluster."
+                        }
+                    }
+                }
+            },
+            {
+                "name": "servicefabric_getApplication",
+                "toolReferenceName": "sfApp",
+                "displayName": "Service Fabric Application Details",
+                "userDescription": "Get the services, partitions and replicas of a Service Fabric application.",
+                "modelDescription": "Returns one application on a Service Fabric cluster with all of its services (type, stateful/stateless, status, health), their partitions (status, health) and replicas or instances (role, status, health, node). Use it to diagnose unhealthy or failing services. Read-only.",
+                "canBeReferencedInPrompt": true,
+                "icon": "$(server-environment)",
+                "tags": [
+                    "service-fabric",
+                    "azure"
+                ],
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "cluster": {
+                            "type": "string",
+                            "description": "Label or HTTP gateway endpoint of a saved cluster (see servicefabric_listClusters). Omit to use the active cluster."
+                        },
+                        "application": {
+                            "type": "string",
+                            "description": "Application name, e.g. fabric:/MyApp or MyApp."
+                        }
+                    },
+                    "required": [
+                        "application"
+                    ]
+                }
+            },
+            {
+                "name": "servicefabric_getClusterEvents",
+                "toolReferenceName": "sfEvents",
+                "displayName": "Service Fabric Cluster Events",
+                "userDescription": "Get recent events from a Service Fabric cluster's EventStore.",
+                "modelDescription": "Returns recent cluster events from the Service Fabric EventStore (node, application, partition, replica and health events), newest first, up to 200. Fails on clusters without EventStore (most local dev clusters). Read-only.",
+                "canBeReferencedInPrompt": true,
+                "icon": "$(server-environment)",
+                "tags": [
+                    "service-fabric",
+                    "azure"
+                ],
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "cluster": {
+                            "type": "string",
+                            "description": "Label or HTTP gateway endpoint of a saved cluster (see servicefabric_listClusters). Omit to use the active cluster."
+                        },
+                        "minutes": {
+                            "type": "number",
+                            "description": "How far back to look, in minutes (1 to 1440). Default 60."
+                        }
+                    }
+                }
             }
         ]
     },

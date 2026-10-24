@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import type { SfProjectWatcher } from '../project/projectWatcher';
 import type { ApplicationProject } from '../project/sfprojModel';
+import { samePath } from '../util/paths';
 import { findAttributeOccurrences, findParameterRefs, type TextRange } from '../util/xmlText';
 import { applicationParameterDeclarations } from '../util/xmlOutline';
 
@@ -211,10 +212,6 @@ function projectFiles(project: ApplicationProject): string[] {
 		...project.serviceManifests.map((sm) => sm.path),
 		...(project.startupServicesManifest ? [project.startupServicesManifest] : []),
 	];
-}
-
-function samePath(a: string, b: string): boolean {
-	return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
 /** Ranges of the text inside each `"name"` string literal. */

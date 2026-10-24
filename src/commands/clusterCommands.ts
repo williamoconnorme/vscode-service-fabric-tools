@@ -66,10 +66,19 @@ export async function addCluster(store: ConnectionStore, local: LocalClusterMana
  * `serviceFabric.cluster.connectRemote`: saves a remote cluster connection. For https
  * endpoints it offers to pin an untrusted server certificate, and for clusters secured
  * with Microsoft Entra ID it signs in through VS Code's Microsoft account provider.
+ * `initialEndpoint` pre-fills the prompt (a `vscode://` link); the user still confirms it.
  */
-export async function connectRemoteCluster(store: ConnectionStore, local: LocalClusterManager, logger: Logger): Promise<void> {
+export async function connectRemoteCluster(
+	store: ConnectionStore,
+	local: LocalClusterManager,
+	logger: Logger,
+	initialEndpoint?: string,
+): Promise<void> {
 	const endpoint = await vscode.window.showInputBox({
-		prompt: 'Enter Service Fabric HTTP gateway endpoint',
+		prompt: initialEndpoint
+			? 'A link asked to add this Service Fabric cluster. Check the HTTP gateway endpoint, then press Enter to add it'
+			: 'Enter Service Fabric HTTP gateway endpoint',
+		value: initialEndpoint,
 		placeHolder: 'https://my-cluster.eastus.cloudapp.azure.com:19080',
 		validateInput: (value) => {
 			if (!/^https?:\/\//.test(value)) return 'Must start with http:// or https://';

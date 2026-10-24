@@ -473,6 +473,24 @@ export class SfRestClient {
 		return json ? toApplicationInfo(json) : undefined;
 	}
 
+	/** The provisioned `ApplicationManifest.xml` of an application type version. */
+	async getApplicationManifest(typeName: string, typeVersion: string, timeoutMs = 10000): Promise<string> {
+		const json = await this.get(
+			`/ApplicationTypes/${encodeURIComponent(typeName)}/$/GetApplicationManifest?ApplicationTypeVersion=${encodeURIComponent(typeVersion)}`,
+			timeoutMs,
+		);
+		return String(json?.Manifest ?? '');
+	}
+
+	/** The provisioned `ServiceManifest.xml` of a service package in an application type version. */
+	async getServiceManifest(typeName: string, typeVersion: string, serviceManifestName: string, timeoutMs = 10000): Promise<string> {
+		const json = await this.get(
+			`/ApplicationTypes/${encodeURIComponent(typeName)}/$/GetServiceManifest?ApplicationTypeVersion=${encodeURIComponent(typeVersion)}&ServiceManifestName=${encodeURIComponent(serviceManifestName)}`,
+			timeoutMs,
+		);
+		return String(json?.Manifest ?? '');
+	}
+
 	getApplicationHealth(applicationId: string, timeoutMs = 10000): Promise<unknown> {
 		return this.get(`/Applications/${applicationId}/$/GetHealth`, timeoutMs);
 	}

@@ -38,6 +38,8 @@ This guide walks through every feature of the **Service Fabric Tools** extension
 | Local dev cluster | Windows. Service Fabric SDK (provides `FabricHostSvc` and the `Microsoft.ServiceFabric.ClusterSetup` PS modules). On macOS / Linux see §6.4. |
 | Debug attach | Windows, with the service running on this machine (local cluster). `ms-dotnettools.csharp` (or another CoreCLR debug adapter) for `.NET`; classic CLR debugger for `.NET Framework` services. |
 
+**Remote development.** The extension runs where the workspace is: on the SSH host, in WSL, a Dev Container or a Codespace. Building, the PowerShell engine and the SDK checks use that machine's tools, and `http://localhost:19080` means a cluster on that machine, not on your local PC; from WSL or a container, add the Windows host's dev cluster as a remote cluster instead. Publishing with the REST engine to a remote cluster works from all of them. Service Fabric Explorer links to `localhost` open through VS Code's port forwarding.
+
 ### 1.2 Install
 
 - **From the marketplace**: search for *"Service Fabric Tools"* and install.
@@ -169,7 +171,7 @@ The extension has its own Service Fabric schema support; no XML extension is nee
 - **Hover.** Element and attribute names show the schema documentation, allowed values and defaults.
 - **Validation (`SFXxxx`).** Malformed XML (`SFX001`), elements not allowed in their parent (`SFX101`), unknown attributes (`SFX102`), missing required attributes (`SFX103`) or child elements (`SFX105`), and values outside an enumeration (`SFX104`) are errors. Elements repeated more often than allowed (`SFX106`) and text where none is allowed (`SFX107`) are warnings. Values containing `[Parameter]` references aren't checked, since they're substituted at deployment. An empty root element (the actor `ServiceManifest.xml` stub that the build fills in) isn't flagged for missing children. Child **order** inside a sequence isn't checked. Turn validation off with `serviceFabric.diagnostics.enableSchemaValidation: false`.
 
-**Which schema is used.** The extension bundles a model of `ServiceFabricServiceModel.xsd`. When a Service Fabric SDK is installed (`C:\Program Files\Microsoft SDKs\Service Fabric\schemas\`, with `C:\Program Files\Microsoft Service Fabric\bin\Fabric\Fabric.Code\` as a fallback, or `~/.servicefabric/schemas/` on macOS / Linux), that XSD is used instead, so a newer SDK's additions show up. Set `serviceFabric.xmlSchemaPath` to a folder or `.xsd` file to choose one explicitly. The **Service Fabric** output channel logs which one is in use.
+**Which schema is used.** The extension bundles a model of `ServiceFabricServiceModel.xsd`. When a Service Fabric SDK is installed (`C:\Program Files\Microsoft SDKs\Service Fabric\schemas\`, with `C:\Program Files\Microsoft Service Fabric\bin\Fabric\Fabric.Code\` as a fallback, or `~/.servicefabric/schemas/` on macOS / Linux), that XSD is used instead, so a newer SDK's additions show up. Set `serviceFabric.xmlSchemaPath` to a folder or `.xsd` file to choose one explicitly. The **Service Fabric** output channel logs which one is in use, and in a Service Fabric XML file the `{}` language status in the status bar shows **SF schema: SDK** or **SF schema: bundled** (with the XSD path and whether validation is on; click it for the settings).
 
 If you also have `redhat.vscode-xml` installed and have associated the Service Fabric XSD with it yourself (`xml.fileAssociations`), you'll see duplicate completions and errors; remove that association.
 
@@ -204,7 +206,12 @@ Place the caret on a `[Parameter]` reference (e.g. `"[MyService_InstanceCount]"`
 
 - **Promote literal to parameter** — Hover a literal value (e.g. `InstanceCount="3"`) and apply the lightbulb action. The extension adds a `<Parameter>` to the manifest and rewrites the literal as `[MyService_InstanceCount]`.
 
-### 4.4.1 Cluster health in the Problems panel
+### 4.4.1 Actions and parameter values in the editor
+
+- **CodeLens** above `<ApplicationManifest>`: **Publish…**, **Compare with *cluster*** (diff against the version provisioned on the active cluster; asks which version when several are), **History** (see §10.1) and **Values: *file*** (which parameter file the inline values come from). Above `<ServiceManifest>`: **Compare with *cluster***. The compare also runs from the editor's right-click menu (**Compare Manifest with Deployed Version**).
+- **Inline parameter values.** After every `[Parameter]` reference in `ApplicationManifest.xml`, an inlay hint shows the value it gets: from the chosen parameter file (**Service Fabric: Choose Parameter File for Inline Values…**, or the **Values:** CodeLens), else the manifest's `DefaultValue`. Hover a hint to see where the value came from. With a parameter file chosen, declarations it overrides show the override too. Turn hints off with VS Code's `editor.inlayHints.enabled`.
+
+### 4.4.2 Cluster health in the Problems panel
 
 While the active cluster is connected, its unhealthy applications and services appear in **Problems** on the files they come from: an application of this manifest's type on `ApplicationTypeName` in `ApplicationManifest.xml` (`SFH001`), a service on its `ServiceTypeName` in `ServiceManifest.xml` (`SFH002`). `Warning` health is a warning, `Error` an error; the message includes the cluster's first unhealthy evaluation. The code links to the entity in Service Fabric Explorer, and the lightbulb offers **Show health** and **Open in Service Fabric Explorer**. Problems update when the cluster's state changes and every minute while the window is focused. Turn this off with `serviceFabric.diagnostics.showClusterHealth: false`.
 
@@ -583,6 +590,35 @@ The view shows:
 
 Diagnostic events require the `EventStoreService` system service to be enabled on the target cluster. Local SDK clusters have it on by default; remote production clusters may not — confirm with the SF Explorer's *Cluster → System Services* page.
 
+### 10.1 Deployment history
+
+**Show Deployment History** (right-click an application in the Clusters view, the **History** CodeLens on `ApplicationManifest.xml`, or the palette) lists an application's EventStore events of the last 30 days, newest first: created, upgrades started / per upgrade domain / completed (with `from → to` versions, mode and duration), rollbacks, deletes, health reports and process or container exits. It opens as a read-only log. It needs EventStore on the cluster, like the events panel.
+
+### 10.2 Copilot and other agents
+
+The extension contributes read-only **language model tools** that Copilot agent mode (and any chat agent using VS Code's tools API) can call. Reference them in a prompt with `#sfProjects`, `#sfClusters`, `#sfHealth`, `#sfApps`, `#sfApp` or `#sfEvents`, or let the agent pick them:
+
+| Tool | Returns |
+|---|---|
+| Service Fabric Projects | The workspace's `.sfproj` projects: application type and version, parameters, service packages, parameter files, publish profiles. |
+| Service Fabric Clusters | Saved clusters: endpoint, active, state, health, node and application counts. |
+| Service Fabric Cluster Health | Aggregated health, unhealthy evaluations, node and application health. |
+| Service Fabric Applications | Applications (type, version, status, health, parameters) and provisioned types. |
+| Service Fabric Application Details | One application's services, partitions and replicas with roles, status, health and nodes. |
+| Service Fabric Cluster Events | Recent EventStore events (up to 200). |
+
+The tools never change anything on a cluster, never prompt for sign-in, and skip clusters you disconnected. They need VS Code 1.95 or later.
+
+### 10.3 Links
+
+- **Terminals.** `fabric:/App` and `fabric:/App/Service` names in any terminal (build and publish tasks, PowerShell, `sfctl`) are links: click for **Open in Service Fabric Explorer** and **Show Deployment History** on the active cluster, or **Copy**.
+- **`vscode://` links** for runbooks, wikis and alerts:
+  - `vscode://williamoconnor.service-fabric-tools/openCluster?endpoint=https://mycluster:19080` makes that saved cluster active and shows the Clusters view.
+  - `vscode://williamoconnor.service-fabric-tools/openApplication?app=fabric:/Shop&endpoint=https://mycluster:19080` offers the same actions as a terminal link.
+  - `vscode://williamoconnor.service-fabric-tools/addCluster?endpoint=https://mycluster:19080` starts **Connect to Remote Cluster…** with the endpoint filled in.
+
+  A link never contacts a cluster that isn't saved; it offers to add it, through the usual prompts.
+
 ---
 
 ## 11. Scaffolding new applications & services
@@ -820,6 +856,7 @@ Idempotent — running it twice is safe; the second run reports zero consumers u
 | `serviceFabric.clusters.autoRefreshSeconds` | `30` | Clusters view auto-refresh interval while the view is visible and the window focused. `0` turns it off. See §3.2. |
 | `serviceFabric.tree.showDeploymentStatus` | `true` | Badge applications that are deployed on the active cluster. |
 | `serviceFabric.diagnostics.enableManifestRules` | `true` | Enable `SFD00x` rules. |
+| `serviceFabric.diagnostics.showClusterHealth` | `true` | Show the active cluster's unhealthy applications and services in Problems (`SFH00x`). See §4.4.2. |
 | `serviceFabric.diagnostics.enableSchemaValidation` | `true` | Enable `SFXxxx` schema validation. Completion and hover stay on. See §4.1. |
 | `serviceFabric.deploy.packagePath` | `""` | Override the application package path passed to `Deploy-FabricApplication.ps1`. Absolute, or relative to the `.sfproj` directory. Use when MSBuild outputs the package somewhere other than `pkg\<Configuration>\` and the `.sfproj`'s `<OutputPath>`/`<PackageLocation>` (e.g. monorepo drops to a sibling folder). **1.1.9:** MSBuild `$(Property)` references (`$(MSBuildProjectName)`, `$(Configuration)`, etc.) are expanded against the `.sfproj`'s PropertyGroup values. **1.1.11:** the override path is now scanned to `serviceFabric.deploy.searchMaxDepth` levels deep (same as every other declared candidate) when the manifest is not directly under it. When this setting resolves to a package whose `ApplicationTypeName` does not match the project's declared type, a modal warning prompts before deploy (not persisted). |
 | `serviceFabric.deploy.useMsbuildPropertyEvaluator` | `false` | When `true`, fall back to invoking `MSBuild.exe -getProperty:` to resolve `<OutputPath>` / `<PackageLocation>` values that reference properties defined in imported targets (e.g. `Microsoft.ServiceFabric.targets`, `Directory.Build.props`). The in-extension expander handles all properties declared in the `.sfproj`'s own `<PropertyGroup>` blocks; enable this only when your build relies on imported-property expansion. Adds 1–3 s per Publish on cold cache. See §8.1. |
@@ -891,6 +928,9 @@ All commands live under the **Service Fabric** category in the command palette.
 | Trust ASP.NET Core Dev Certificate | Validates the ASP.NET Core HTTPS development certificate via `dotnet dev-certs https --check`; regenerates and trusts it when missing / expired / untrusted (or expiring within `serviceFabric.devCert.expirationWarningDays`). Idempotent. Cross-platform: Windows surfaces a UAC prompt, macOS a keychain prompt, Linux generates the cert and surfaces a docs link for per-distro manual trust. |
 | Reset Tier 2 Property-Evaluator Prompt (legacy cleanup) | (Legacy cleanup.) Clears any per-`.sfproj` Memento entries written by 1.1.10's Tier 2 prompt. 1.1.11+ does not write these entries; the command exists only to wipe stale state. Safe to run on workspaces that never used 1.1.10. |
 | Show Diagnostic Events | Opens the diagnostic events webview. |
+| Show Deployment History | An application's EventStore history (creates, upgrades, rollbacks, deletes). See §10.1. |
+| Compare Manifest with Deployed Version | Diffs `ApplicationManifest.xml` / `ServiceManifest.xml` against the version provisioned on the active cluster. See §4.4.1. |
+| Choose Parameter File for Inline Values… | Picks the parameter file whose values the manifest's inlay hints show. See §4.4.1. |
 
 ---
 
@@ -938,7 +978,7 @@ All commands live under the **Service Fabric** category in the command palette.
 
 ### 14.7 Where are the logs?
 
-- **Service Fabric** output channel — every action the extension performs.
+- **Service Fabric** output channel — every action the extension performs, timestamped and coloured by level.
 - `%TEMP%\\vscode-service-fabric\\*.log` — rolling extension log when `serviceFabric.logLevel: debug`.
 - `C:\\SfDevCluster\\Log\\Traces\\` — local cluster traces.
 

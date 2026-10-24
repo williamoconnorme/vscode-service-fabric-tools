@@ -25,6 +25,11 @@ import { ManifestCodeActionProvider } from './language/manifestCodeActions';
 import { ManifestSymbolProvider } from './language/manifestSymbols';
 import { ManifestReferenceProvider } from './language/manifestReferences';
 import { ClusterHealthProblems } from './language/clusterHealthProblems';
+import { registerLanguageModelTools } from './ai/languageModelTools';
+import { ManifestLens } from './language/manifestLens';
+import { showDeploymentHistory } from './commands/deploymentHistory';
+import { FabricTerminalLinkProvider } from './views/fabricTerminalLinks';
+import { ServiceFabricUriHandler } from './uriHandler';
 import { ServiceFabricTaskProvider } from './build/sfTaskProvider';
 import { resolveTargetProject, runBuildTarget } from './commands/buildCommands';
 import { ensureNugetRestored } from './build/nugetRestore';
@@ -194,6 +199,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.languages.registerDefinitionProvider(SF_XML_SELECTOR, manifestReferences),
 	);
 	context.subscriptions.push(new ClusterHealthProblems(connections, projects, logger));
+	context.subscriptions.push(...registerLanguageModelTools(connections, projects));
+	context.subscriptions.push(
+		vscode.window.registerTerminalLinkProvider(new FabricTerminalLinkProvider(connections)),
+		vscode.window.registerUriHandler(
+			new ServiceFabricUriHandler(connections, (endpoint) => connectRemoteCluster(connections, localCluster, logger, endpoint)),
+		),
+	);
+	const manifestLens = new ManifestLens(projects, connections, clusterDocuments, context.workspaceState);
+	context.subscriptions.push(
+		manifestLens,
+		vscode.languages.registerCodeLensProvider(MANIFEST_SELECTOR, manifestLens),
+		vscode.languages.registerInlayHintsProvider(MANIFEST_SELECTOR, manifestLens),
+	);
 	context.subscriptions.push(vscode.tasks.registerTaskProvider(ServiceFabricTaskProvider.type, new ServiceFabricTaskProvider(projects)));
 	context.subscriptions.push(
 		vscode.workspace.onDidChangeConfiguration((e) => {
@@ -321,6 +339,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			async () => {
 				await clustersTree.setFilter(EMPTY_FILTER);
 				publishClusterFilter();
+			},
+		],
+		...manifestLens.commands(),
+		[
+			'serviceFabric.showDeploymentHistory',
+			(arg?: ClusterTreeItem | vscode.Uri) => {
+				if (arg instanceof vscode.Uri || !arg) {
+					// From a manifest: that project's application type.
+					const file = (arg ?? vscode.window.activeTextEditor?.document.uri)?.fsPath;
+					const project = file ? projects.getProjects().find((p) => file.toLowerCase().startsWith(p.sfproj.directory.toLowerCase())) : undefined;
+					return showDeploymentHistory(connections, clusterDocuments, { typeName: project?.applicationManifest?.applicationTypeName });
+				}
+				return showDeploymentHistory(connections, clusterDocuments, { connection: arg.connection, appName: arg.appName });
 			},
 		],
 		...clusterEntityCommands({ store: connections, local: localCluster, tree: clustersTree, documents: clusterDocuments, logger }),
