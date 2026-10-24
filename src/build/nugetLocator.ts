@@ -1,97 +1,110 @@
-// @ts-nocheck
 import * as path from 'path';
 import * as cp from 'child_process';
 import { pathExists } from '../util/fs';
 
-function tryGetNugetPathOverride() {
+/** Where a nuget.exe was found. */
+export type NugetSource = 'override' | 'vswhere' | 'path' | 'profile';
+
+export interface NugetLocation {
+	executable: string;
+	/** Human-readable source, for logs. */
+	description: string;
+	kind: NugetSource;
+}
+
+// `vscode` is loaded lazily so that callers running outside VS Code (notably
+// the unit-test harness) can import this module without `Cannot find module
+// 'vscode'`. The override setting is a no-op when vscode isn't available.
+function tryGetNugetPathOverride(): string {
 	try {
-		let r = require('vscode')?.workspace?.getConfiguration?.('serviceFabric')?.get?.('nugetPath');
-		return typeof r == 'string' ? r : '';
+		// eslint-disable-next-line @typescript-eslint/no-require-imports
+		const v = require('vscode') as typeof import('vscode') | undefined;
+		const value = v?.workspace?.getConfiguration?.('serviceFabric')?.get?.('nugetPath');
+		return typeof value == 'string' ? value : '';
 	} catch {
 		return '';
 	}
 }
 
-async function locateNuget() {
-	let e = tryGetNugetPathOverride();
-	if (e && (await pathExists(e)))
-		return {
-			executable: e,
-			description: `override: ${e}`,
-			kind: 'override',
-		};
-	if (process.platform === 'win32') {
-		let n = await locateViaVswhere();
-		if (n)
-			return {
-				executable: n,
-				description: `vswhere: ${n}`,
-				kind: 'vswhere',
-			};
+/**
+ * Discover a `nuget.exe` capable of restoring `packages.config` style projects.
+ *
+ * Resolution order:
+ *   1. `serviceFabric.nugetPath` setting (override).
+ *   2. `vswhere -latest -find Common7\IDE\CommonExtensions\Microsoft\NuGet\NuGet.exe`
+ *      (Windows-only — picks up the NuGet.exe that ships with Visual Studio).
+ *   3. `nuget` / `nuget.exe` on PATH (`where.exe` on Windows, `which` elsewhere).
+ *   4. `%USERPROFILE%\.nuget\nuget.exe` (the profile-cached download many users
+ *      have from prior `dotnet tool` or manual installs).
+ *
+ * Returns `undefined` when no candidate is found; callers fall through to
+ * MSBuild-driven restore (strategy C) or the direct nupkg fetch (strategy F).
+ */
+export async function locateNuget(): Promise<NugetLocation | undefined> {
+	const overridden = tryGetNugetPathOverride();
+	if (overridden && (await pathExists(overridden))) {
+		return { executable: overridden, description: `override: ${overridden}`, kind: 'override' };
 	}
-	let t = await locateOnPath();
-	if (t)
-		return {
-			executable: t,
-			description: `PATH: ${t}`,
-			kind: 'path',
-		};
-	let r = await locateInUserProfile();
-	if (r)
-		return {
-			executable: r,
-			description: `profile: ${r}`,
-			kind: 'profile',
-		};
+	if (process.platform === 'win32') {
+		const fromVswhere = await locateViaVswhere();
+		if (fromVswhere) {
+			return { executable: fromVswhere, description: `vswhere: ${fromVswhere}`, kind: 'vswhere' };
+		}
+	}
+	const onPath = await locateOnPath();
+	if (onPath) {
+		return { executable: onPath, description: `PATH: ${onPath}`, kind: 'path' };
+	}
+	const profile = await locateInUserProfile();
+	if (profile) {
+		return { executable: profile, description: `profile: ${profile}`, kind: 'profile' };
+	}
+	return undefined;
 }
 
-async function locateViaVswhere() {
-	let e = process.env['ProgramFiles(x86)'] ?? process.env.ProgramFiles ?? 'C:\\Program Files (x86)',
-		t = path.join(e, 'Microsoft Visual Studio', 'Installer', 'vswhere.exe');
-	if (await pathExists(t))
-		return new Promise((r) => {
-			let n = (0, cp.spawn)(t, ['-latest', '-products', '*', '-find', 'Common7\\IDE\\CommonExtensions\\Microsoft\\NuGet\\NuGet.exe'], {
-					windowsHide: !0,
-				}),
-				i = '';
-			(n.stdout.on('data', (o) => (i += o.toString())),
-				n.on('error', () => r(void 0)),
-				n.on('close', () => {
-					let o = i
-						.split(/\r?\n/)
-						.map((s) => s.trim())
-						.filter(Boolean);
-					r(o[0]);
-				}));
+async function locateViaVswhere(): Promise<string | undefined> {
+	const programFiles = process.env['ProgramFiles(x86)'] ?? process.env.ProgramFiles ?? 'C:\\Program Files (x86)';
+	const vswhere = path.join(programFiles, 'Microsoft Visual Studio', 'Installer', 'vswhere.exe');
+	if (!(await pathExists(vswhere))) return undefined;
+	return new Promise((resolve) => {
+		const child = cp.spawn(vswhere, ['-latest', '-products', '*', '-find', 'Common7\\IDE\\CommonExtensions\\Microsoft\\NuGet\\NuGet.exe'], {
+			windowsHide: true,
 		});
-}
-
-async function locateOnPath() {
-	let e = process.platform === 'win32' ? 'where.exe' : 'which',
-		t = process.platform === 'win32' ? 'nuget.exe' : 'nuget';
-	return new Promise((r) => {
-		let n = (0, cp.spawn)(e, [t], {
-				windowsHide: !0,
-			}),
-			i = '';
-		(n.stdout.on('data', (o) => (i += o.toString())),
-			n.on('error', () => r(void 0)),
-			n.on('close', (o) => {
-				if (o !== 0) return r(void 0);
-				let s = i
-					.split(/\r?\n/)
-					.map((a) => a.trim())
-					.filter(Boolean);
-				r(s[0]);
-			}));
+		let out = '';
+		child.stdout.on('data', (d) => (out += d.toString()));
+		child.on('error', () => resolve(undefined));
+		child.on('close', () => {
+			const lines = out
+				.split(/\r?\n/)
+				.map((l) => l.trim())
+				.filter(Boolean);
+			resolve(lines[0]);
+		});
 	});
 }
 
-async function locateInUserProfile() {
-	let e = process.env.USERPROFILE ?? process.env.HOME;
-	if (!e) return;
-	let t = path.join(e, '.nuget', 'nuget.exe');
-	return (await pathExists(t)) ? t : void 0;
+async function locateOnPath(): Promise<string | undefined> {
+	const cmd = process.platform === 'win32' ? 'where.exe' : 'which';
+	const arg = process.platform === 'win32' ? 'nuget.exe' : 'nuget';
+	return new Promise((resolve) => {
+		const child = cp.spawn(cmd, [arg], { windowsHide: true });
+		let out = '';
+		child.stdout.on('data', (d) => (out += d.toString()));
+		child.on('error', () => resolve(undefined));
+		child.on('close', (code) => {
+			if (code !== 0) return resolve(undefined);
+			const lines = out
+				.split(/\r?\n/)
+				.map((l) => l.trim())
+				.filter(Boolean);
+			resolve(lines[0]);
+		});
+	});
 }
 
-export { locateNuget };
+async function locateInUserProfile(): Promise<string | undefined> {
+	const home = process.env.USERPROFILE ?? process.env.HOME;
+	if (!home) return undefined;
+	const candidate = path.join(home, '.nuget', 'nuget.exe');
+	return (await pathExists(candidate)) ? candidate : undefined;
+}

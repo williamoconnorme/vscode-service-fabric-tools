@@ -1,234 +1,315 @@
-// @ts-nocheck
+/**
+ * Tier 2 package-path resolution: ask MSBuild itself for the values of
+ * `OutputPath`, `PackageLocation` and `BuildOutputPath`, so properties that
+ * come from imported targets (`Microsoft.ServiceFabric.targets`,
+ * `Directory.Build.props`, ...) are expanded the same way a real build would.
+ *
+ * Strategy:
+ *  1. `MSBuild.exe <sfproj> -getProperty:...` (MSBuild 17.8+), which prints
+ *     JSON for multiple properties (or `Name=Value` lines on some hosts).
+ *  2. Fallback for older MSBuild: inject a tiny `.targets` file through
+ *     `CustomAfterMicrosoftCommonTargets` whose target echoes each property
+ *     with a sentinel prefix, then scrape stdout.
+ *
+ * Results are cached per (sfproj path, mtime, configuration, platform) for
+ * the lifetime of the extension host. Every failure degrades to `[]` with a
+ * log line; this module never throws to the deploy flow.
+ */
 import * as fsp from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import * as cp from 'child_process';
-import { locateMsBuild } from '../build/msbuildLocator';
+import { locateMsBuild, type MsBuildInvocation } from '../build/msbuildLocator';
+import type { PackageRootCandidate } from '../deploy/packageResolver';
 
-var evaluatorCache = new Map();
-
-function evaluatorCacheKey(e) {
-	return `${e.sfprojPath.toLowerCase()}::${e.mtimeMs}::${e.configuration}::${e.platform}`;
+/** Logging surface used by the evaluator (satisfied by the extension's Logger). */
+export interface EvaluatorLogger {
+	debug(message: string): void;
+	info(message: string): void;
+	warn(message: string): void;
 }
 
-async function evaluateMsbuildPackageCandidates(e, t, r, n = {}) {
-	let i = n.platform ?? 'AnyCPU',
-		o = n.timeoutMs ?? 15e3,
-		s;
+export interface EvaluateOptions {
+	/** MSBuild `Platform` property. Defaults to `AnyCPU`. */
+	platform?: string;
+	/** Per-invocation timeout. Defaults to 15 s. */
+	timeoutMs?: number;
+}
+
+interface EvaluatedProperties {
+	OutputPath?: string;
+	PackageLocation?: string;
+	BuildOutputPath?: string;
+}
+
+interface CacheKeyInput {
+	sfprojPath: string;
+	mtimeMs: number;
+	configuration: string;
+	platform: string;
+}
+
+interface CacheEntry {
+	key: CacheKeyInput;
+	candidates: PackageRootCandidate[];
+}
+
+interface SpawnResult {
+	exitCode: number;
+	stdout: string;
+	stderr: string;
+}
+
+const evaluatorCache = new Map<string, CacheEntry>();
+
+function evaluatorCacheKey(key: CacheKeyInput): string {
+	return `${key.sfprojPath.toLowerCase()}::${key.mtimeMs}::${key.configuration}::${key.platform}`;
+}
+
+/**
+ * Evaluate the `.sfproj` with MSBuild and return package-root candidates
+ * derived from `PackageLocation`, `OutputPath` and `BuildOutputPath`
+ * (relative values are resolved against the `.sfproj` directory). Returns
+ * `[]` when MSBuild can't be found or run.
+ */
+export async function evaluateMsbuildPackageCandidates(
+	sfprojPath: string,
+	configuration: string,
+	logger: EvaluatorLogger,
+	options: EvaluateOptions = {},
+): Promise<PackageRootCandidate[]> {
+	const platform = options.platform ?? 'AnyCPU';
+	const timeoutMs = options.timeoutMs ?? 15000;
+	let mtimeMs: number;
 	try {
-		s = (await fsp.stat(e)).mtimeMs;
-	} catch (m) {
-		return (r.warn(`MSBuild evaluator skipped: cannot stat ${e}: ${m.message}`), []);
+		mtimeMs = (await fsp.stat(sfprojPath)).mtimeMs;
+	} catch (err) {
+		logger.warn(`MSBuild evaluator skipped: cannot stat ${sfprojPath}: ${(err as Error).message}`);
+		return [];
 	}
-	let a = {
-			sfprojPath: e,
-			mtimeMs: s,
-			configuration: t,
-			platform: i,
-		},
-		c = evaluatorCache.get(evaluatorCacheKey(a));
-	if (c) return (r.debug(`MSBuild evaluator cache hit for ${path.basename(e)} (${t}|${i}).`), c.candidates);
-	let l;
+	const key: CacheKeyInput = { sfprojPath, mtimeMs, configuration, platform };
+	const cached = evaluatorCache.get(evaluatorCacheKey(key));
+	if (cached) {
+		logger.debug(`MSBuild evaluator cache hit for ${path.basename(sfprojPath)} (${configuration}|${platform}).`);
+		return cached.candidates;
+	}
+	let msbuild: MsBuildInvocation | undefined;
 	try {
-		l = await locateMsBuild();
-	} catch (m) {
-		return (r.warn(`MSBuild evaluator skipped: ${m.message}.`), []);
+		msbuild = await locateMsBuild();
+	} catch (err) {
+		logger.warn(`MSBuild evaluator skipped: ${(err as Error).message}.`);
+		return [];
 	}
-	if (!l || !l.executable) return (r.warn('MSBuild evaluator skipped: MSBuild.exe not found.'), []);
-	let u = path.dirname(e),
-		p = (await evaluateViaGetProperty(l, e, t, i, o, r)) ?? (await evaluateViaInlineTarget(l, e, t, i, o, r));
-	if (!p)
-		return (
-			evaluatorCache.set(evaluatorCacheKey(a), {
-				key: a,
-				candidates: [],
-			}),
-			[]
+	if (!msbuild || !msbuild.executable) {
+		logger.warn('MSBuild evaluator skipped: MSBuild.exe not found.');
+		return [];
+	}
+	const sfprojDir = path.dirname(sfprojPath);
+	const props =
+		(await evaluateViaGetProperty(msbuild, sfprojPath, configuration, platform, timeoutMs, logger)) ??
+		(await evaluateViaInlineTarget(msbuild, sfprojPath, configuration, platform, timeoutMs, logger));
+	if (!props) {
+		evaluatorCache.set(evaluatorCacheKey(key), { key, candidates: [] });
+		return [];
+	}
+	const candidates: PackageRootCandidate[] = [];
+	const push = (raw: string | undefined, source: string): void => {
+		if (!raw) return;
+		const value = raw.trim();
+		if (!value) return;
+		const norm = (path.isAbsolute(value) ? value : path.join(sfprojDir, value)).replace(/[\\/]+$/, '');
+		if (!candidates.some((c) => c.path.toLowerCase() === norm.toLowerCase())) {
+			candidates.push({ path: norm, source });
+		}
+	};
+	push(props.PackageLocation, 'MSBuild -getProperty:PackageLocation');
+	push(props.OutputPath, 'MSBuild -getProperty:OutputPath');
+	push(props.BuildOutputPath, 'MSBuild -getProperty:BuildOutputPath');
+	evaluatorCache.set(evaluatorCacheKey(key), { key, candidates });
+	if (candidates.length > 0) {
+		logger.info(
+			`MSBuild evaluator produced ${candidates.length} package-path candidate(s): ${candidates.map((c) => `${c.source}=${c.path}`).join('; ')}`,
 		);
-	let d = [],
-		f = (m, v) => {
-			if (!m) return;
-			let h = m.trim();
-			if (!h) return;
-			let g = (path.isAbsolute(h) ? h : path.join(u, h)).replace(/[\\/]+$/, '');
-			d.some((w) => w.path.toLowerCase() === g.toLowerCase()) ||
-				d.push({
-					path: g,
-					source: v,
-				});
-		};
-	return (
-		f(p.PackageLocation, 'MSBuild -getProperty:PackageLocation'),
-		f(p.OutputPath, 'MSBuild -getProperty:OutputPath'),
-		f(p.BuildOutputPath, 'MSBuild -getProperty:BuildOutputPath'),
-		evaluatorCache.set(evaluatorCacheKey(a), {
-			key: a,
-			candidates: d,
-		}),
-		d.length > 0
-			? r.info(`MSBuild evaluator produced ${d.length} package-path candidate(s): ${d.map((m) => `${m.source}=${m.path}`).join('; ')}`)
-			: r.warn(`MSBuild evaluator returned no usable values for ${path.basename(e)} (${t}|${i}).`),
-		d
-	);
+	} else {
+		logger.warn(`MSBuild evaluator returned no usable values for ${path.basename(sfprojPath)} (${configuration}|${platform}).`);
+	}
+	return candidates;
 }
 
-async function evaluateViaGetProperty(e, t, r, n, i, o) {
-	let s = [
-			...e.leadingArgs,
-			t,
-			'-nologo',
-			'-noconlog',
-			'-getProperty:OutputPath,PackageLocation,BuildOutputPath',
-			`-p:Configuration=${r}`,
-			`-p:Platform=${n}`,
-		],
-		a = await spawnCapture(e.executable, s, i);
-	if (!a) {
-		o.warn('MSBuild evaluator: spawn failed for -getProperty: invocation.');
-		return;
+/** Strategy 1: `-getProperty:`. Returns `undefined` to signal "try the fallback". */
+async function evaluateViaGetProperty(
+	msbuild: MsBuildInvocation,
+	sfprojPath: string,
+	configuration: string,
+	platform: string,
+	timeoutMs: number,
+	logger: EvaluatorLogger,
+): Promise<EvaluatedProperties | undefined> {
+	const args = [
+		...msbuild.leadingArgs,
+		sfprojPath,
+		'-nologo',
+		'-noconlog',
+		'-getProperty:OutputPath,PackageLocation,BuildOutputPath',
+		`-p:Configuration=${configuration}`,
+		`-p:Platform=${platform}`,
+	];
+	const result = await spawnCapture(msbuild.executable, args, timeoutMs);
+	if (!result) {
+		logger.warn('MSBuild evaluator: spawn failed for -getProperty: invocation.');
+		return undefined;
 	}
-	if (a.exitCode !== 0) {
-		o.debug(
-			`MSBuild -getProperty: failed with exit ${a.exitCode}; will try inline-target fallback. stderr: ${truncateForLog(a.stderr, 240)}`,
+	if (result.exitCode !== 0) {
+		logger.debug(
+			`MSBuild -getProperty: failed with exit ${result.exitCode}; will try inline-target fallback. stderr: ${truncateForLog(result.stderr, 240)}`,
 		);
-		return;
+		return undefined;
 	}
-	return parseGetPropertyOutput(a.stdout);
+	return parseGetPropertyOutput(result.stdout);
 }
 
-function parseGetPropertyOutput(e) {
-	let t = e.trim();
-	if (!t) return {};
-	if (t.startsWith('{'))
+/**
+ * Parse `-getProperty:` output: either JSON (`{"Properties": {...}}`) or
+ * `Name=Value` lines.
+ */
+function parseGetPropertyOutput(stdout: string): EvaluatedProperties {
+	const text = stdout.trim();
+	if (!text) return {};
+	if (text.startsWith('{')) {
 		try {
-			let n = JSON.parse(t),
-				i = n?.Properties ?? n;
-			if (i && typeof i == 'object')
+			// Parsed JSON blob from MSBuild; shape checked field by field below.
+			const parsed: any = JSON.parse(text);
+			const props = parsed?.Properties ?? parsed;
+			if (props && typeof props == 'object') {
 				return {
-					OutputPath: typeof i.OutputPath == 'string' ? i.OutputPath : void 0,
-					PackageLocation: typeof i.PackageLocation == 'string' ? i.PackageLocation : void 0,
-					BuildOutputPath: typeof i.BuildOutputPath == 'string' ? i.BuildOutputPath : void 0,
+					OutputPath: typeof props.OutputPath == 'string' ? props.OutputPath : undefined,
+					PackageLocation: typeof props.PackageLocation == 'string' ? props.PackageLocation : undefined,
+					BuildOutputPath: typeof props.BuildOutputPath == 'string' ? props.BuildOutputPath : undefined,
 				};
-		} catch {}
-	let r = {};
-	for (let n of t.split(/\r?\n/)) {
-		let i = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(n);
-		if (!i) continue;
-		let o = i[1],
-			s = i[2];
-		o === 'OutputPath'
-			? (r.OutputPath = s)
-			: o === 'PackageLocation'
-				? (r.PackageLocation = s)
-				: o === 'BuildOutputPath' && (r.BuildOutputPath = s);
+			}
+		} catch {
+			// Not JSON after all — fall through to line parsing.
+		}
 	}
-	return r;
+	const out: EvaluatedProperties = {};
+	for (const line of text.split(/\r?\n/)) {
+		const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
+		if (!m) continue;
+		const name = m[1];
+		const value = m[2];
+		if (name === 'OutputPath') out.OutputPath = value;
+		else if (name === 'PackageLocation') out.PackageLocation = value;
+		else if (name === 'BuildOutputPath') out.BuildOutputPath = value;
+	}
+	return out;
 }
 
-async function evaluateViaInlineTarget(e, t, r, n, i, o) {
-	let s = await fsp.mkdtemp(path.join(os.tmpdir(), 'sfproj-eval-')),
-		a = path.join(s, 'SfProjEval.targets'),
-		c = '__SFPROJ_EVAL__',
-		l = `<?xml version="1.0" encoding="utf-8"?>
+/** Strategy 2: inject a temporary `.targets` file that echoes the properties. */
+async function evaluateViaInlineTarget(
+	msbuild: MsBuildInvocation,
+	sfprojPath: string,
+	configuration: string,
+	platform: string,
+	timeoutMs: number,
+	logger: EvaluatorLogger,
+): Promise<EvaluatedProperties | undefined> {
+	const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'sfproj-eval-'));
+	const targetsPath = path.join(tempDir, 'SfProjEval.targets');
+	const sentinel = '__SFPROJ_EVAL__';
+	const targetsXml = `<?xml version="1.0" encoding="utf-8"?>
 <Project>
   <Target Name="SfProjEvalGetProps">
-    <Message Importance="High" Text="${c}|OutputPath=$(OutputPath)" />
-    <Message Importance="High" Text="${c}|PackageLocation=$(PackageLocation)" />
-    <Message Importance="High" Text="${c}|BuildOutputPath=$(BuildOutputPath)" />
+    <Message Importance="High" Text="${sentinel}|OutputPath=$(OutputPath)" />
+    <Message Importance="High" Text="${sentinel}|PackageLocation=$(PackageLocation)" />
+    <Message Importance="High" Text="${sentinel}|BuildOutputPath=$(BuildOutputPath)" />
   </Target>
 </Project>
 `;
 	try {
-		await fsp.writeFile(a, l, 'utf8');
-		let u = [
-				...e.leadingArgs,
-				t,
-				'-nologo',
-				'-noconlog',
-				'-target:SfProjEvalGetProps',
-				`-p:Configuration=${r}`,
-				`-p:Platform=${n}`,
-				`-p:CustomAfterMicrosoftCommonTargets=${a}`,
-				`-p:CustomAfterMicrosoftCommonCrossTargetingTargets=${a}`,
-			],
-			p = await spawnCapture(e.executable, u, i);
-		if (!p) {
-			o.warn('MSBuild evaluator: inline-target spawn failed.');
-			return;
+		await fsp.writeFile(targetsPath, targetsXml, 'utf8');
+		const args = [
+			...msbuild.leadingArgs,
+			sfprojPath,
+			'-nologo',
+			'-noconlog',
+			'-target:SfProjEvalGetProps',
+			`-p:Configuration=${configuration}`,
+			`-p:Platform=${platform}`,
+			`-p:CustomAfterMicrosoftCommonTargets=${targetsPath}`,
+			`-p:CustomAfterMicrosoftCommonCrossTargetingTargets=${targetsPath}`,
+		];
+		const result = await spawnCapture(msbuild.executable, args, timeoutMs);
+		if (!result) {
+			logger.warn('MSBuild evaluator: inline-target spawn failed.');
+			return undefined;
 		}
-		if (p.exitCode !== 0) {
-			o.warn(`MSBuild inline-target evaluator failed (exit ${p.exitCode}). stderr: ${truncateForLog(p.stderr, 240)}`);
-			return;
+		if (result.exitCode !== 0) {
+			logger.warn(`MSBuild inline-target evaluator failed (exit ${result.exitCode}). stderr: ${truncateForLog(result.stderr, 240)}`);
+			return undefined;
 		}
-		let d = {};
-		for (let f of p.stdout.split(/\r?\n/)) {
-			let m = new RegExp(`${c}\\|([A-Za-z_][A-Za-z0-9_]*)=(.*)$`).exec(f);
+		const out: EvaluatedProperties = {};
+		for (const line of result.stdout.split(/\r?\n/)) {
+			const m = new RegExp(`${sentinel}\\|([A-Za-z_][A-Za-z0-9_]*)=(.*)$`).exec(line);
 			if (!m) continue;
-			let v = m[2].trim();
-			m[1] === 'OutputPath'
-				? (d.OutputPath = v)
-				: m[1] === 'PackageLocation'
-					? (d.PackageLocation = v)
-					: m[1] === 'BuildOutputPath' && (d.BuildOutputPath = v);
+			const value = m[2].trim();
+			if (m[1] === 'OutputPath') out.OutputPath = value;
+			else if (m[1] === 'PackageLocation') out.PackageLocation = value;
+			else if (m[1] === 'BuildOutputPath') out.BuildOutputPath = value;
 		}
-		return d;
-	} catch (u) {
-		o.warn(`MSBuild inline-target evaluator failed: ${u.message}`);
-		return;
+		return out;
+	} catch (err) {
+		logger.warn(`MSBuild inline-target evaluator failed: ${(err as Error).message}`);
+		return undefined;
 	} finally {
 		try {
-			await fsp.rm(s, {
-				recursive: !0,
-				force: !0,
-			});
-		} catch {}
+			await fsp.rm(tempDir, { recursive: true, force: true });
+		} catch {
+			// best effort
+		}
 	}
 }
 
-function spawnCapture(e, t, r) {
-	return new Promise((n) => {
-		let i = '',
-			o = '',
-			s = !1,
-			a = (0, cp.spawn)(e, [...t], {
-				windowsHide: !0,
-			}),
-			c = setTimeout(() => {
-				if (!s) {
-					s = !0;
-					try {
-						a.kill();
-					} catch {}
-					n({
-						exitCode: -1,
-						stdout: i,
-						stderr:
-							o +
-							`
-[timed out]`,
-					});
+/**
+ * Spawn a process and capture stdout/stderr. Resolves `undefined` when the
+ * process can't be spawned, and `exitCode: -1` (with `[timed out]` appended
+ * to stderr) when it outlives `timeoutMs`. Never rejects.
+ */
+function spawnCapture(executable: string, args: readonly string[], timeoutMs: number): Promise<SpawnResult | undefined> {
+	return new Promise((resolve) => {
+		let stdout = '';
+		let stderr = '';
+		let settled = false;
+		const child = cp.spawn(executable, [...args], { windowsHide: true });
+		const timer = setTimeout(() => {
+			if (!settled) {
+				settled = true;
+				try {
+					child.kill();
+				} catch {
+					// already gone
 				}
-			}, r);
-		(a.stdout?.on('data', (l) => (i += l.toString())),
-			a.stderr?.on('data', (l) => (o += l.toString())),
-			a.on('error', () => {
-				s || ((s = !0), clearTimeout(c), n(void 0));
-			}),
-			a.on('close', (l) => {
-				s ||
-					((s = !0),
-					clearTimeout(c),
-					n({
-						exitCode: l ?? 0,
-						stdout: i,
-						stderr: o,
-					}));
-			}));
+				resolve({ exitCode: -1, stdout, stderr: stderr + '\n[timed out]' });
+			}
+		}, timeoutMs);
+		child.stdout?.on('data', (chunk: Buffer) => (stdout += chunk.toString()));
+		child.stderr?.on('data', (chunk: Buffer) => (stderr += chunk.toString()));
+		child.on('error', () => {
+			if (!settled) {
+				settled = true;
+				clearTimeout(timer);
+				resolve(undefined);
+			}
+		});
+		child.on('close', (code) => {
+			if (!settled) {
+				settled = true;
+				clearTimeout(timer);
+				resolve({ exitCode: code ?? 0, stdout, stderr });
+			}
+		});
 	});
 }
 
-function truncateForLog(e, t) {
-	return e ? (e.length <= t ? e : e.slice(0, t) + '\u2026') : '';
+function truncateForLog(text: string | undefined, max: number): string {
+	return text ? (text.length <= max ? text : text.slice(0, max) + '\u2026') : '';
 }
-
-export { evaluateMsbuildPackageCandidates };

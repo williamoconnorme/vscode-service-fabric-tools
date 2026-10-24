@@ -1,11 +1,10 @@
-// @ts-nocheck
 import * as vscode from 'vscode';
-import { createLogger } from './util/logger';
+import { createLogger, type LogLevel } from './util/logger';
 import { SfProjectWatcher } from './project/projectWatcher';
 import { ApplicationsTreeProvider } from './views/applicationsTreeProvider';
 import { ConnectionStore } from './cluster/connectionStore';
 import { LocalClusterManager } from './cluster/localCluster';
-import { ClustersTreeProvider } from './views/clustersTreeProvider';
+import { ClustersTreeProvider, type ClusterTreeItem } from './views/clustersTreeProvider';
 import { ClusterStatusBar } from './views/clusterStatusBar';
 import { Telemetry } from './util/telemetry';
 import { DiagnosticEventsPanel } from './views/diagnosticEventsPanel';
@@ -36,173 +35,193 @@ import { runRemoveServiceCommand } from './commands/removeServiceCommand';
 import { runAddLibraryCommand } from './commands/addLibraryCommand';
 import { removeLibraryCommand } from './commands/removeLibraryCommand';
 
-async function activate(e) {
-	let { logger: t, channel: r } = createLogger();
-	e.subscriptions.push(r);
-	let n = vscode.workspace.getConfiguration('serviceFabric');
-	(t.setLevel(n.get('logLevel') ?? 'info'), t.info(`Service Fabric extension activating on ${process.platform}`));
-	let i = new SfProjectWatcher(t);
-	(await i.initialize(), e.subscriptions.push(i));
-	let o = new ApplicationsTreeProvider(i),
-		s = vscode.window.createTreeView('serviceFabric.applications', {
-			treeDataProvider: o,
-		});
-	e.subscriptions.push(s);
-	let a = new ConnectionStore(e);
-	e.subscriptions.push(a);
-	let c = new LocalClusterManager(a, t),
-		l = new ClustersTreeProvider(a),
-		u = vscode.window.createTreeView('serviceFabric.clusters', {
-			treeDataProvider: l,
-		});
-	e.subscriptions.push(u);
-	let p = new ClusterStatusBar(a, c, t);
-	e.subscriptions.push(p);
-	let d = new Telemetry(t);
-	(e.subscriptions.push(d),
-		d.event('extension.activated', {
-			platform: process.platform,
-		}));
-	let f = new DiagnosticEventsPanel(a, t);
-	(e.subscriptions.push(f),
-		e.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('servicefabric', new ServiceFabricDebugConfigurationProvider(a))));
-	let m = () => {
-		vscode.commands.executeCommand('setContext', 'serviceFabric.hasProject', i.getProjects().length > 0);
+/**
+ * A registered command handler. VS Code passes menu/palette arguments untyped,
+ * so handlers take `any` here; each handler narrows its own argument.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type CommandHandler = (...args: any[]) => unknown;
+
+/** The manifests that get definition and code-action providers. */
+const MANIFEST_SELECTOR: vscode.DocumentFilter[] = [
+	{ language: 'xml', scheme: 'file', pattern: '**/ApplicationManifest.xml' },
+	{ language: 'xml', scheme: 'file', pattern: '**/ServiceManifest.xml' },
+];
+
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+	const { logger, channel } = createLogger();
+	context.subscriptions.push(channel);
+	const config = vscode.workspace.getConfiguration('serviceFabric');
+	logger.setLevel(config.get<LogLevel>('logLevel') ?? 'info');
+	logger.info(`Service Fabric extension activating on ${process.platform}`);
+
+	const projects = new SfProjectWatcher(logger);
+	await projects.initialize();
+	context.subscriptions.push(projects);
+
+	const applicationsTree = new ApplicationsTreeProvider(projects);
+	const applicationsView = vscode.window.createTreeView('serviceFabric.applications', {
+		treeDataProvider: applicationsTree,
+	});
+	context.subscriptions.push(applicationsView);
+
+	const connections = new ConnectionStore(context);
+	context.subscriptions.push(connections);
+	const localCluster = new LocalClusterManager(connections, logger);
+	const clustersTree = new ClustersTreeProvider(connections);
+	const clustersView = vscode.window.createTreeView('serviceFabric.clusters', {
+		treeDataProvider: clustersTree,
+	});
+	context.subscriptions.push(clustersView);
+	const statusBar = new ClusterStatusBar(connections, localCluster, logger);
+	context.subscriptions.push(statusBar);
+
+	const telemetry = new Telemetry(logger);
+	context.subscriptions.push(telemetry);
+	telemetry.event('extension.activated', { platform: process.platform });
+
+	const diagnosticEvents = new DiagnosticEventsPanel(connections, logger);
+	context.subscriptions.push(diagnosticEvents);
+	context.subscriptions.push(
+		vscode.debug.registerDebugConfigurationProvider('servicefabric', new ServiceFabricDebugConfigurationProvider(connections)),
+	);
+
+	const updateHasProjectContext = (): void => {
+		vscode.commands.executeCommand('setContext', 'serviceFabric.hasProject', projects.getProjects().length > 0);
 	};
-	(m(), e.subscriptions.push(i.onDidChange(m)), await registerXmlSchemaAssociations(e, t));
-	let v = new ManifestDiagnostics(i);
-	(v.setEnabled(n.get('diagnostics.enableManifestRules') ?? !0), e.subscriptions.push(v));
-	let h = [
-		{
-			language: 'xml',
-			scheme: 'file',
-			pattern: '**/ApplicationManifest.xml',
-		},
-		{
-			language: 'xml',
-			scheme: 'file',
-			pattern: '**/ServiceManifest.xml',
-		},
-	];
-	(e.subscriptions.push(
-		vscode.languages.registerDefinitionProvider(h, new ManifestDefinitionProvider(i)),
-		vscode.languages.registerCodeActionsProvider(h, new ManifestCodeActionProvider(i), {
+	updateHasProjectContext();
+	context.subscriptions.push(projects.onDidChange(updateHasProjectContext));
+	await registerXmlSchemaAssociations(context, logger);
+
+	const manifestDiagnostics = new ManifestDiagnostics(projects);
+	manifestDiagnostics.setEnabled(config.get<boolean>('diagnostics.enableManifestRules') ?? true);
+	context.subscriptions.push(manifestDiagnostics);
+
+	context.subscriptions.push(
+		vscode.languages.registerDefinitionProvider(MANIFEST_SELECTOR, new ManifestDefinitionProvider(projects)),
+		vscode.languages.registerCodeActionsProvider(MANIFEST_SELECTOR, new ManifestCodeActionProvider(projects), {
 			providedCodeActionKinds: ManifestCodeActionProvider.providedCodeActionKinds,
 		}),
-	),
-		e.subscriptions.push(vscode.tasks.registerTaskProvider(ServiceFabricTaskProvider.type, new ServiceFabricTaskProvider(i))),
-		e.subscriptions.push(
-			vscode.workspace.onDidChangeConfiguration((g) => {
-				if (g.affectsConfiguration('serviceFabric.logLevel')) {
-					let w = vscode.workspace.getConfiguration('serviceFabric').get('logLevel') ?? 'info';
-					t.setLevel(w);
-				}
-				if (g.affectsConfiguration('serviceFabric.diagnostics.enableManifestRules')) {
-					let w = vscode.workspace.getConfiguration('serviceFabric').get('diagnostics.enableManifestRules') ?? !0;
-					v.setEnabled(w);
-				}
-			}),
-		));
-	let P = [
-		['serviceFabric.refreshApplications', () => o.refresh()],
-		['serviceFabric.refreshClusters', () => l.refresh()],
+	);
+	context.subscriptions.push(vscode.tasks.registerTaskProvider(ServiceFabricTaskProvider.type, new ServiceFabricTaskProvider(projects)));
+	context.subscriptions.push(
+		vscode.workspace.onDidChangeConfiguration((e) => {
+			if (e.affectsConfiguration('serviceFabric.logLevel')) {
+				const level = vscode.workspace.getConfiguration('serviceFabric').get<LogLevel>('logLevel') ?? 'info';
+				logger.setLevel(level);
+			}
+			if (e.affectsConfiguration('serviceFabric.diagnostics.enableManifestRules')) {
+				const enabled = vscode.workspace.getConfiguration('serviceFabric').get<boolean>('diagnostics.enableManifestRules') ?? true;
+				manifestDiagnostics.setEnabled(enabled);
+			}
+		}),
+	);
+
+	const commands: [string, CommandHandler][] = [
+		['serviceFabric.refreshApplications', () => applicationsTree.refresh()],
+		['serviceFabric.refreshClusters', () => clustersTree.refresh()],
 		[
 			'serviceFabric.openFile',
-			async (g) => {
-				if (!g) return;
-				let w;
+			async (uri: vscode.Uri | undefined) => {
+				if (!uri) return;
+				let stat: vscode.FileStat | undefined;
 				try {
-					w = await vscode.workspace.fs.stat(g);
+					stat = await vscode.workspace.fs.stat(uri);
 				} catch {
-					w = void 0;
+					stat = undefined;
 				}
-				if (w?.type === vscode.FileType.Directory) await vscode.commands.executeCommand('revealInExplorer', g);
-				else {
-					let b = await vscode.workspace.openTextDocument(g);
-					await vscode.window.showTextDocument(b, {
-						preview: !1,
-					});
+				if (stat?.type === vscode.FileType.Directory) {
+					await vscode.commands.executeCommand('revealInExplorer', uri);
+				} else {
+					const doc = await vscode.workspace.openTextDocument(uri);
+					await vscode.window.showTextDocument(doc, { preview: false });
 				}
 			},
 		],
-		['serviceFabric.build', (g) => runBuildTarget(i, t, 'Build', g)],
-		['serviceFabric.rebuild', (g) => runBuildTarget(i, t, 'Rebuild', g)],
-		['serviceFabric.clean', (g) => runBuildTarget(i, t, 'Clean', g)],
-		['serviceFabric.package', (g) => runBuildTarget(i, t, 'Package', g)],
+		['serviceFabric.build', (arg) => runBuildTarget(projects, logger, 'Build', arg)],
+		['serviceFabric.rebuild', (arg) => runBuildTarget(projects, logger, 'Rebuild', arg)],
+		['serviceFabric.clean', (arg) => runBuildTarget(projects, logger, 'Clean', arg)],
+		['serviceFabric.package', (arg) => runBuildTarget(projects, logger, 'Package', arg)],
 		[
 			'serviceFabric.restore',
-			async (g) => {
-				let w = await resolveTargetProject(i, g);
-				if (!w) return;
-				let b = await vscode.window.withProgress(
+			async (arg) => {
+				const project = await resolveTargetProject(projects, arg);
+				if (!project) return;
+				const result = await vscode.window.withProgress(
 					{
 						location: vscode.ProgressLocation.Notification,
-						title: `Service Fabric: restoring NuGet packages for ${w.sfproj.path}\u2026`,
+						title: `Service Fabric: restoring NuGet packages for ${project.sfproj.path}…`,
 					},
-					(S) =>
-						ensureNugetRestored(w.sfproj.path, {
-							output: t.outputChannel,
-							progress: S,
-						}),
+					(progress) => ensureNugetRestored(project.sfproj.path, { output: logger.outputChannel, progress }),
 				);
-				if (!b.ok) {
-					(t.error(`NuGet restore failed (${b.strategy}): ${b.message ?? 'no details'}`),
-						await vscode.window.showErrorMessage(`Service Fabric: NuGet restore failed. ${b.message ?? ''}`, {
-							modal: !0,
-						}));
+				if (!result.ok) {
+					logger.error(`NuGet restore failed (${result.strategy}): ${result.message ?? 'no details'}`);
+					await vscode.window.showErrorMessage(`Service Fabric: NuGet restore failed. ${result.message ?? ''}`, { modal: true });
 					return;
 				}
-				b.strategy === 'skipped'
-					? (t.debug('NuGet restore skipped (already up to date).'),
-						vscode.window.showInformationMessage('Service Fabric: NuGet packages are already restored.'))
-					: (t.info(`NuGet restore succeeded via ${b.strategy}.`),
-						vscode.window.showInformationMessage(`Service Fabric: NuGet packages restored (${b.strategy}).`));
+				if (result.strategy === 'skipped') {
+					logger.debug('NuGet restore skipped (already up to date).');
+					vscode.window.showInformationMessage('Service Fabric: NuGet packages are already restored.');
+				} else {
+					logger.info(`NuGet restore succeeded via ${result.strategy}.`);
+					vscode.window.showInformationMessage(`Service Fabric: NuGet packages restored (${result.strategy}).`);
+				}
 			},
 		],
-		['serviceFabric.publish', (g) => publishApplication(i, a, c, t, g, e.workspaceState, d)],
-		['serviceFabric.remove', (g) => removeApplication(i, a, c, t, g)],
-		['serviceFabric.cluster.connectLocal', () => connectLocalCluster(c)],
-		['serviceFabric.cluster.connectRemote', () => connectRemoteCluster(a, c)],
-		['serviceFabric.cluster.disconnect', (g) => disconnectCluster(a, g?.connection)],
-		['serviceFabric.cluster.selectActive', () => selectActiveCluster(a)],
-		['serviceFabric.cluster.startLocal', () => startLocalCluster(t)],
-		['serviceFabric.cluster.stopLocal', () => stopLocalCluster(t)],
-		['serviceFabric.cluster.resetLocal', () => resetLocalCluster(t)],
-		['serviceFabric.cluster.switchLocalMode', () => switchLocalClusterMode(t)],
-		['serviceFabric.cluster.openExplorer', (g) => openClusterExplorer(a, g?.connection)],
-		['serviceFabric.createApplication', () => runCreateApplicationCommand(t)],
-		['serviceFabric.addService', (g) => runAddServiceCommand(i, t, toCommandTarget(g))],
-		['serviceFabric.removeService', (g) => runRemoveServiceCommand(i, t, toCommandTarget(g))],
-		['serviceFabric.addLibrary', (g) => runAddLibraryCommand(i, t, toCommandTarget(g))],
-		['serviceFabric.removeLibrary', (g) => removeLibraryCommand(i, t, toCommandTarget(g))],
-		['serviceFabric.debug.attachToService', (g) => (d.event('debug.attach.invoked'), attachToDeployedService(a, t, g))],
+		[
+			'serviceFabric.publish',
+			(arg) => publishApplication(projects, connections, localCluster, logger, arg, context.workspaceState, telemetry),
+		],
+		['serviceFabric.remove', (arg) => removeApplication(projects, connections, localCluster, logger, arg)],
+		['serviceFabric.cluster.connectLocal', () => connectLocalCluster(localCluster)],
+		['serviceFabric.cluster.connectRemote', () => connectRemoteCluster(connections, localCluster)],
+		['serviceFabric.cluster.disconnect', (node?: ClusterTreeItem) => disconnectCluster(connections, node?.connection)],
+		['serviceFabric.cluster.selectActive', () => selectActiveCluster(connections)],
+		['serviceFabric.cluster.startLocal', () => startLocalCluster(logger)],
+		['serviceFabric.cluster.stopLocal', () => stopLocalCluster(logger)],
+		['serviceFabric.cluster.resetLocal', () => resetLocalCluster(logger)],
+		['serviceFabric.cluster.switchLocalMode', () => switchLocalClusterMode(logger)],
+		['serviceFabric.cluster.openExplorer', (node?: ClusterTreeItem) => openClusterExplorer(connections, node?.connection)],
+		['serviceFabric.createApplication', () => runCreateApplicationCommand(logger)],
+		['serviceFabric.addService', (arg) => runAddServiceCommand(projects, logger, toCommandTarget(arg))],
+		['serviceFabric.removeService', (arg) => runRemoveServiceCommand(projects, logger, toCommandTarget(arg))],
+		['serviceFabric.addLibrary', (arg) => runAddLibraryCommand(projects, logger, toCommandTarget(arg))],
+		['serviceFabric.removeLibrary', (arg) => removeLibraryCommand(projects, logger, toCommandTarget(arg))],
+		[
+			'serviceFabric.debug.attachToService',
+			(arg) => {
+				telemetry.event('debug.attach.invoked');
+				return attachToDeployedService(connections, logger, arg);
+			},
+		],
 		[
 			'serviceFabric.debug.autoAttachNext',
-			async (g) => {
-				let w = g?.appName;
-				if (!w) {
+			async (node?: ClusterTreeItem) => {
+				const appName = node?.appName;
+				if (!appName) {
 					vscode.window.showWarningMessage('Right-click an application in the Clusters tree to enable auto-attach for the next deploy.');
 					return;
 				}
-				let b = w.startsWith('fabric:/') ? w : `fabric:/${w}`,
-					S = `serviceFabric.autoAttachNext:${b}`;
-				(await e.workspaceState.update(S, !0),
-					d.event('debug.autoAttachNext.armed'),
-					vscode.window.showInformationMessage(`Auto-attach armed for ${b}. The next successful Publish will attach the debugger.`));
+				const fullName = appName.startsWith('fabric:/') ? appName : `fabric:/${appName}`;
+				const stateKey = `serviceFabric.autoAttachNext:${fullName}`;
+				await context.workspaceState.update(stateKey, true);
+				telemetry.event('debug.autoAttachNext.armed');
+				vscode.window.showInformationMessage(`Auto-attach armed for ${fullName}. The next successful Publish will attach the debugger.`);
 			},
 		],
 		[
 			'serviceFabric.devCert.trust',
 			async () => {
-				d.event('devcert.trust.invoked');
-				let { runDevCertTrust: g } = await import('./devcert/devCertTrust');
-				await g(t, d, 'manual');
+				telemetry.event('devcert.trust.invoked');
+				const { runDevCertTrust } = await import('./devcert/devCertTrust');
+				await runDevCertTrust(logger, telemetry, 'manual');
 			},
 		],
 		[
 			'serviceFabric.diagnostics.showEvents',
 			() => {
-				(d.event('diagnostics.events.opened'), f.show(e.extensionUri));
+				telemetry.event('diagnostics.events.opened');
+				diagnosticEvents.show(context.extensionUri);
 			},
 		],
 		[
@@ -210,54 +229,50 @@ async function activate(e) {
 			() =>
 				vscode.commands.executeCommand(
 					'workbench.action.openWalkthrough',
-					{
-						category: `${e.extension.id}#serviceFabric.gettingStarted`,
-					},
-					!1,
+					{ category: `${context.extension.id}#serviceFabric.gettingStarted` },
+					false,
 				),
 		],
 		[
 			'serviceFabric.openHelp',
 			async () => {
-				d.event('help.opened');
-				let g = vscode.Uri.joinPath(e.extensionUri, 'docs', 'HOWTO.md');
+				telemetry.event('help.opened');
+				const helpUri = vscode.Uri.joinPath(context.extensionUri, 'docs', 'HOWTO.md');
 				try {
-					await vscode.commands.executeCommand('markdown.showPreview', g);
+					await vscode.commands.executeCommand('markdown.showPreview', helpUri);
 				} catch {
-					let w = await vscode.workspace.openTextDocument(g);
-					await vscode.window.showTextDocument(w, {
-						preview: !1,
-					});
+					const doc = await vscode.workspace.openTextDocument(helpUri);
+					await vscode.window.showTextDocument(doc, { preview: false });
 				}
 			},
 		],
 		[
 			'serviceFabric.resetTier2Prompt',
 			async () => {
-				let { TIER2_PROMPT_SUPPRESS_KEY_PREFIX: g } = await import('./deploy/tier2Prompt'),
-					w = e.workspaceState.keys().filter((S) => S.startsWith(g));
-				for (let S of w) await e.workspaceState.update(S, void 0);
-				let b = w.length === 1 ? 'entry' : 'entries';
-				(t.info(`Reset Tier 2 property-evaluator prompt: cleared ${w.length} legacy ${b} from 1.1.10.`),
-					vscode.window.showInformationMessage(
-						`Service Fabric: Cleared ${w.length} legacy Tier 2 prompt ${b}. (In 1.1.11+ the prompt no longer remembers per-project decisions; this command only clears stale entries from 1.1.10.)`,
-					));
+				const { TIER2_PROMPT_SUPPRESS_KEY_PREFIX } = await import('./deploy/tier2Prompt');
+				const staleKeys = context.workspaceState.keys().filter((key) => key.startsWith(TIER2_PROMPT_SUPPRESS_KEY_PREFIX));
+				for (const key of staleKeys) await context.workspaceState.update(key, undefined);
+				const noun = staleKeys.length === 1 ? 'entry' : 'entries';
+				logger.info(`Reset Tier 2 property-evaluator prompt: cleared ${staleKeys.length} legacy ${noun} from 1.1.10.`);
+				vscode.window.showInformationMessage(
+					`Service Fabric: Cleared ${staleKeys.length} legacy Tier 2 prompt ${noun}. (In 1.1.11+ the prompt no longer remembers per-project decisions; this command only clears stale entries from 1.1.10.)`,
+				);
 			},
 		],
 	];
-	for (let [g, w] of P) e.subscriptions.push(vscode.commands.registerCommand(g, w));
-	(t.info(`Found ${i.getProjects().length} Service Fabric project(s) in this workspace.`), v.refreshAll());
+	for (const [id, handler] of commands) context.subscriptions.push(vscode.commands.registerCommand(id, handler));
+
+	logger.info(`Found ${projects.getProjects().length} Service Fabric project(s) in this workspace.`);
+	manifestDiagnostics.refreshAll();
 }
 
-function deactivate() {}
+export function deactivate(): void {}
 
-function toCommandTarget(e) {
-	if (e)
-		return e instanceof vscode.Uri
-			? {
-					resource: e,
-				}
-			: e;
+/**
+ * Normalizes a scaffold-command argument: an Explorer `Uri` becomes `{ resource }`,
+ * a tree item (which already carries `resource`) passes through.
+ */
+function toCommandTarget<T extends object>(arg: vscode.Uri | T | undefined): { resource: vscode.Uri } | T | undefined {
+	if (arg) return arg instanceof vscode.Uri ? { resource: arg } : arg;
+	return undefined;
 }
-
-export { activate, deactivate };

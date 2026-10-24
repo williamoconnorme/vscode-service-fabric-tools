@@ -1,218 +1,253 @@
-// @ts-nocheck
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { applyRemoveLibrary } from '../scaffold/removeLibraryApply';
 import { isServiceFabricServiceProject } from '../scaffold/addLibraryTemplates';
 
-async function removeLibraryCommand(e, t, r) {
-	let n = resolveTargetUri(r);
-	if ((n ? path.extname(n.fsPath).toLowerCase() : '') === '.csproj' && n) {
-		await removeLibraryFromCsproj(t, n.fsPath);
+import type { ApplicationProject } from '../project/sfprojModel';
+import type { SfProjectWatcher } from '../project/projectWatcher';
+import type { Logger } from '../util/logger';
+
+/** Command argument: an Explorer URI or a tree item / wrapper carrying a `resource` URI. */
+export type RemoveLibraryTarget = vscode.Uri | { resource?: vscode.Uri } | undefined;
+
+/** A workspace library: a non-service csproj referenced by at least one other csproj. */
+interface DiscoveredLibrary {
+	libraryCsprojPath: string;
+	consumers: string[];
+}
+
+const CSPROJ_GLOB = '**/*.csproj';
+const CSPROJ_EXCLUDE_GLOB = '**/{node_modules,bin,obj,packages}/**';
+
+/**
+ * `serviceFabric.removeLibrary`. Invoked on a library `.csproj` it unwires
+ * picked consumers from that library; otherwise (on a `.sfproj` or from the
+ * palette) it lists every workspace library and optionally deletes the folder.
+ */
+export async function removeLibraryCommand(watcher: SfProjectWatcher, logger: Logger, target: RemoveLibraryTarget): Promise<void> {
+	const uri = resolveTargetUri(target);
+	if ((uri ? path.extname(uri.fsPath).toLowerCase() : '') === '.csproj' && uri) {
+		await removeLibraryFromCsproj(logger, uri.fsPath);
 		return;
 	}
-	await removeLibraryFromApplication(e, t, n);
+	await removeLibraryFromApplication(watcher, logger, uri);
 }
 
-function resolveTargetUri(e) {
-	if (e) return e instanceof vscode.Uri ? e : e.resource;
+function resolveTargetUri(target: RemoveLibraryTarget): vscode.Uri | undefined {
+	if (target) return target instanceof vscode.Uri ? target : target.resource;
+	return undefined;
 }
 
-async function removeLibraryFromApplication(e, t, r) {
-	let n = e.getProjects();
-	if (n.length === 0) {
+/** `.sfproj` / palette flow: pick library, pick consumers, optionally delete the folder. */
+async function removeLibraryFromApplication(watcher: SfProjectWatcher, logger: Logger, uri: vscode.Uri | undefined): Promise<void> {
+	const projects = watcher.getProjects();
+	if (projects.length === 0) {
 		vscode.window.showErrorMessage('No Service Fabric application projects (.sfproj) are open.');
 		return;
 	}
-	let i = await pickApplicationProject(n, r);
-	if (!i) return;
-	let o = await discoverLibraries(i);
-	if (o.length === 0) {
+	const project = await pickApplicationProject(projects, uri);
+	if (!project) return;
+	const libraries = await discoverLibraries(project);
+	if (libraries.length === 0) {
 		vscode.window.showInformationMessage(
 			'No library projects found in the workspace (a library is a non-service .csproj that is referenced by at least one service).',
 		);
 		return;
 	}
-	let s = o.map((d) => ({
-			label: path.basename(d.libraryCsprojPath, '.csproj'),
-			description: `${d.consumers.length} consumer(s)`,
-			detail: d.libraryCsprojPath,
-			library: d,
-		})),
-		a = await vscode.window.showQuickPick(s, {
-			placeHolder: 'Select the library project to remove',
-		});
-	if (!a) return;
-	let c = a.library.consumers.map((d) => ({
-			label: path.basename(d, '.csproj'),
-			description: d,
-			consumer: d,
-			picked: !0,
-		})),
-		l = await vscode.window.showQuickPick(c, {
-			placeHolder: 'Pick which consumers should drop their reference (defaults to all)',
-			canPickMany: !0,
-		});
-	if (l === void 0) return;
-	let u = l.length === a.library.consumers.length,
-		p = !1;
-	if (u) {
-		let d = await vscode.window.showWarningMessage(
-			`All consumers will be unwired from '${path.basename(a.library.libraryCsprojPath)}'. Also delete the library folder from disk?`,
-			{
-				modal: !0,
-			},
+	const libraryItems = libraries.map((library) => ({
+		label: path.basename(library.libraryCsprojPath, '.csproj'),
+		description: `${library.consumers.length} consumer(s)`,
+		detail: library.libraryCsprojPath,
+		library,
+	}));
+	const pickedLibrary = await vscode.window.showQuickPick(libraryItems, {
+		placeHolder: 'Select the library project to remove',
+	});
+	if (!pickedLibrary) return;
+	const { library } = pickedLibrary;
+	const consumerItems = library.consumers.map((consumer) => ({
+		label: path.basename(consumer, '.csproj'),
+		description: consumer,
+		consumer,
+		picked: true,
+	}));
+	const pickedConsumers = await vscode.window.showQuickPick(consumerItems, {
+		placeHolder: 'Pick which consumers should drop their reference (defaults to all)',
+		canPickMany: true,
+	});
+	if (pickedConsumers === undefined) return;
+	const allConsumersPicked = pickedConsumers.length === library.consumers.length;
+	let deleteFolder = false;
+	if (allConsumersPicked) {
+		const choice = await vscode.window.showWarningMessage(
+			`All consumers will be unwired from '${path.basename(library.libraryCsprojPath)}'. Also delete the library folder from disk?`,
+			{ modal: true },
 			'Unwire only',
 			'Unwire and delete folder',
 		);
-		if (d === void 0) return;
-		p = d === 'Unwire and delete folder';
-	} else if (
-		(await vscode.window.showInformationMessage(
-			`Unwire ${l.length} of ${a.library.consumers.length} consumer(s) from '${path.basename(a.library.libraryCsprojPath)}'?`,
-			{
-				modal: !0,
-			},
+		if (choice === undefined) return;
+		deleteFolder = choice === 'Unwire and delete folder';
+	} else {
+		const choice = await vscode.window.showInformationMessage(
+			`Unwire ${pickedConsumers.length} of ${library.consumers.length} consumer(s) from '${path.basename(library.libraryCsprojPath)}'?`,
+			{ modal: true },
 			'Unwire selected',
-		)) !== 'Unwire selected'
-	)
-		return;
+		);
+		if (choice !== 'Unwire selected') return;
+	}
 	try {
-		let d = await applyRemoveLibrary({
-			libraryCsprojPath: a.library.libraryCsprojPath,
-			consumers: l.map((m) => m.consumer),
-			deleteFolder: p,
+		const result = await applyRemoveLibrary({
+			libraryCsprojPath: library.libraryCsprojPath,
+			consumers: pickedConsumers.map((item) => item.consumer),
+			deleteFolder,
 		});
-		t.info(
-			`Removed library references from ${d.unwiredConsumers.length} consumer(s).` +
-				(d.folderDeleted ? ` Library folder deleted: ${d.libraryDirectory}` : ''),
+		logger.info(
+			`Removed library references from ${result.unwiredConsumers.length} consumer(s).` +
+				(result.folderDeleted ? ` Library folder deleted: ${result.libraryDirectory}` : ''),
 		);
-		let f = d.folderDeleted ? ' Folder deleted.' : '';
+		const folderNote = result.folderDeleted ? ' Folder deleted.' : '';
 		vscode.window.showInformationMessage(
-			`Library '${path.basename(a.library.libraryCsprojPath, '.csproj')}' unwired from ${d.unwiredConsumers.length} consumer(s).${f}`,
+			`Library '${path.basename(library.libraryCsprojPath, '.csproj')}' unwired from ${result.unwiredConsumers.length} consumer(s).${folderNote}`,
 		);
-	} catch (d) {
-		let f = d instanceof Error ? d.message : String(d);
-		(t.error(`Remove Library Project failed: ${f}`), vscode.window.showErrorMessage(`Remove Library Project failed: ${f}`));
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		logger.error(`Remove Library Project failed: ${message}`);
+		vscode.window.showErrorMessage(`Remove Library Project failed: ${message}`);
 	}
 }
 
-async function removeLibraryFromCsproj(e, t) {
-	if (!fs.existsSync(t)) {
-		vscode.window.showErrorMessage(`csproj not found: ${t}`);
+/** Library `.csproj` flow: unwire picked consumers; folder deletion is never offered here. */
+async function removeLibraryFromCsproj(logger: Logger, libraryCsprojPath: string): Promise<void> {
+	if (!fs.existsSync(libraryCsprojPath)) {
+		vscode.window.showErrorMessage(`csproj not found: ${libraryCsprojPath}`);
 		return;
 	}
-	let r = fs.readFileSync(t, 'utf8');
-	if (isServiceFabricServiceProject(r)) {
+	const xml = fs.readFileSync(libraryCsprojPath, 'utf8');
+	if (isServiceFabricServiceProject(xml)) {
 		vscode.window.showErrorMessage(
-			`'${path.basename(t)}' is a Service Fabric service project. Use 'Service Fabric: Remove Service\u2026' instead.`,
+			`'${path.basename(libraryCsprojPath)}' is a Service Fabric service project. Use 'Service Fabric: Remove Service…' instead.`,
 		);
 		return;
 	}
-	let n = await findLibraryConsumers(t);
-	if (n.length === 0) {
-		vscode.window.showInformationMessage(`No consumers reference '${path.basename(t)}' in the workspace.`);
+	const consumers = await findLibraryConsumers(libraryCsprojPath);
+	if (consumers.length === 0) {
+		vscode.window.showInformationMessage(`No consumers reference '${path.basename(libraryCsprojPath)}' in the workspace.`);
 		return;
 	}
-	let i = n.map((a) => ({
-			label: path.basename(a, '.csproj'),
-			description: a,
-			consumer: a,
-			picked: !0,
-		})),
-		o = await vscode.window.showQuickPick(i, {
-			placeHolder: `Drop the reference to '${path.basename(t, '.csproj')}' from which consumer(s)?`,
-			canPickMany: !0,
+	const consumerItems = consumers.map((consumer) => ({
+		label: path.basename(consumer, '.csproj'),
+		description: consumer,
+		consumer,
+		picked: true,
+	}));
+	const pickedConsumers = await vscode.window.showQuickPick(consumerItems, {
+		placeHolder: `Drop the reference to '${path.basename(libraryCsprojPath, '.csproj')}' from which consumer(s)?`,
+		canPickMany: true,
+	});
+	if (pickedConsumers === undefined || pickedConsumers.length === 0) return;
+	const confirm = await vscode.window.showWarningMessage(
+		`Unwire ${pickedConsumers.length} consumer(s) from '${path.basename(libraryCsprojPath)}'?`,
+		{ modal: true },
+		'Unwire',
+	);
+	if (confirm !== 'Unwire') return;
+	try {
+		const result = await applyRemoveLibrary({
+			libraryCsprojPath,
+			consumers: pickedConsumers.map((item) => item.consumer),
+			deleteFolder: false,
 		});
-	if (!(
-		o === void 0 ||
-		o.length === 0 ||
-		(await vscode.window.showWarningMessage(
-			`Unwire ${o.length} consumer(s) from '${path.basename(t)}'?`,
-			{
-				modal: !0,
-			},
-			'Unwire',
-		)) !== 'Unwire'
-	))
-		try {
-			let a = await applyRemoveLibrary({
-				libraryCsprojPath: t,
-				consumers: o.map((c) => c.consumer),
-				deleteFolder: !1,
-			});
-			(e.info(`Unwired ${a.unwiredConsumers.length} consumer(s) from ${path.basename(t)}.`),
-				vscode.window.showInformationMessage(
-					`Library '${path.basename(t, '.csproj')}' unwired from ${a.unwiredConsumers.length} consumer(s).`,
-				));
-		} catch (a) {
-			let c = a instanceof Error ? a.message : String(a);
-			(e.error(`Remove Library Project failed: ${c}`), vscode.window.showErrorMessage(`Remove Library Project failed: ${c}`));
-		}
+		logger.info(`Unwired ${result.unwiredConsumers.length} consumer(s) from ${path.basename(libraryCsprojPath)}.`);
+		vscode.window.showInformationMessage(
+			`Library '${path.basename(libraryCsprojPath, '.csproj')}' unwired from ${result.unwiredConsumers.length} consumer(s).`,
+		);
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		logger.error(`Remove Library Project failed: ${message}`);
+		vscode.window.showErrorMessage(`Remove Library Project failed: ${message}`);
+	}
 }
 
-async function pickApplicationProject(e, t) {
-	if (t) {
-		let i = t.fsPath.toLowerCase(),
-			o = e.find((a) => a.sfproj.path.toLowerCase() === i);
-		if (o) return o;
-		let s = e.find((a) => i.startsWith(a.sfproj.directory.toLowerCase()));
-		if (s) return s;
+/**
+ * Resolves the target application: the project whose `.sfproj` is the URI, or
+ * whose directory contains it; else the only project; else a quick pick.
+ */
+async function pickApplicationProject(
+	projects: ApplicationProject[],
+	uri: vscode.Uri | undefined,
+): Promise<ApplicationProject | undefined> {
+	if (uri) {
+		const target = uri.fsPath.toLowerCase();
+		const exact = projects.find((p) => p.sfproj.path.toLowerCase() === target);
+		if (exact) return exact;
+		const containing = projects.find((p) => target.startsWith(p.sfproj.directory.toLowerCase()));
+		if (containing) return containing;
 	}
-	if (e.length === 1) return e[0];
-	let r = e.map((i) => ({
-		label: path.basename(i.sfproj.path),
-		description: i.applicationManifest?.applicationTypeName,
-		detail: i.sfproj.path,
-		project: i,
+	if (projects.length === 1) return projects[0];
+	const items = projects.map((project) => ({
+		label: path.basename(project.sfproj.path),
+		description: project.applicationManifest?.applicationTypeName,
+		detail: project.sfproj.path,
+		project,
 	}));
 	return (
-		await vscode.window.showQuickPick(r, {
+		await vscode.window.showQuickPick(items, {
 			placeHolder: 'Select the Service Fabric application',
 		})
 	)?.project;
 }
 
-async function discoverLibraries(e) {
-	let r = (await vscode.workspace.findFiles('**/*.csproj', '**/{node_modules,bin,obj,packages}/**')).map((i) => i.fsPath),
-		n = [];
-	for (let i of r)
+/**
+ * Every non-service csproj in the workspace that at least one other csproj references.
+ * The scan is workspace-wide; the selected application is not used to narrow it.
+ */
+async function discoverLibraries(_project: ApplicationProject): Promise<DiscoveredLibrary[]> {
+	const csprojPaths = (await vscode.workspace.findFiles(CSPROJ_GLOB, CSPROJ_EXCLUDE_GLOB)).map((uri) => uri.fsPath);
+	const libraries: DiscoveredLibrary[] = [];
+	for (const candidate of csprojPaths) {
 		try {
-			let o = fs.readFileSync(i, 'utf8');
-			if (isServiceFabricServiceProject(o)) continue;
-			let s = [];
-			for (let a of r) a.toLowerCase() !== i.toLowerCase() && csprojReferences(a, i) && s.push(a);
-			if (s.length === 0) continue;
-			n.push({
-				libraryCsprojPath: i,
-				consumers: s,
-			});
-		} catch {}
-	return n.sort((i, o) => i.libraryCsprojPath.localeCompare(o.libraryCsprojPath));
+			const xml = fs.readFileSync(candidate, 'utf8');
+			if (isServiceFabricServiceProject(xml)) continue;
+			const consumers: string[] = [];
+			for (const other of csprojPaths) {
+				if (other.toLowerCase() !== candidate.toLowerCase() && csprojReferences(other, candidate)) consumers.push(other);
+			}
+			if (consumers.length === 0) continue;
+			libraries.push({ libraryCsprojPath: candidate, consumers });
+		} catch {
+			// unreadable csproj: skip
+		}
+	}
+	return libraries.sort((a, b) => a.libraryCsprojPath.localeCompare(b.libraryCsprojPath));
 }
 
-async function findLibraryConsumers(e) {
-	let t = await vscode.workspace.findFiles('**/*.csproj', '**/{node_modules,bin,obj,packages}/**'),
-		r = [];
-	for (let n of t) n.fsPath.toLowerCase() !== e.toLowerCase() && csprojReferences(n.fsPath, e) && r.push(n.fsPath);
-	return r.sort((n, i) => n.localeCompare(i));
+/** Every workspace csproj (other than the library itself) that references `libraryCsprojPath`. */
+async function findLibraryConsumers(libraryCsprojPath: string): Promise<string[]> {
+	const csprojUris = await vscode.workspace.findFiles(CSPROJ_GLOB, CSPROJ_EXCLUDE_GLOB);
+	const consumers: string[] = [];
+	for (const uri of csprojUris) {
+		if (uri.fsPath.toLowerCase() !== libraryCsprojPath.toLowerCase() && csprojReferences(uri.fsPath, libraryCsprojPath)) {
+			consumers.push(uri.fsPath);
+		}
+	}
+	return consumers.sort((a, b) => a.localeCompare(b));
 }
 
-function csprojReferences(e, t) {
-	let r;
+/** True when `consumerCsprojPath` has a `<ProjectReference>` resolving to `libraryCsprojPath`. */
+function csprojReferences(consumerCsprojPath: string, libraryCsprojPath: string): boolean {
+	let xml: string;
 	try {
-		r = fs.readFileSync(e, 'utf8');
+		xml = fs.readFileSync(consumerCsprojPath, 'utf8');
 	} catch {
-		return !1;
+		return false;
 	}
-	let n = path.dirname(e),
-		i = /<ProjectReference\s+Include="([^"]+)"/gi,
-		o;
-	for (; (o = i.exec(r)) !== null;) {
-		let s = o[1].replace(/\\/g, path.sep).replace(/\//g, path.sep);
-		if (path.resolve(n, s).toLowerCase() === t.toLowerCase()) return !0;
+	const consumerDir = path.dirname(consumerCsprojPath);
+	const re = /<ProjectReference\s+Include="([^"]+)"/gi;
+	let m: RegExpExecArray | null;
+	while ((m = re.exec(xml)) !== null) {
+		const include = m[1].replace(/\\/g, path.sep).replace(/\//g, path.sep);
+		if (path.resolve(consumerDir, include).toLowerCase() === libraryCsprojPath.toLowerCase()) return true;
 	}
-	return !1;
+	return false;
 }
-
-export { removeLibraryCommand };

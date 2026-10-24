@@ -1,13 +1,20 @@
-// @ts-nocheck
 import * as vscode from 'vscode';
 import * as fsp from 'fs/promises';
 import * as path from 'path';
-import { resolveTargetProject } from './buildCommands';
+import { resolveTargetProject, type ProjectCommandTarget, type ProjectLookup } from './buildCommands';
 import { ensureNugetRestored } from '../build/nugetRestore';
 import { createSfBuildTask } from '../build/sfTaskProvider';
 import { pathExists } from '../util/fs';
-import { buildPropertyMap, makeExpander } from '../project/msbuildPropertyExpander';
-import { PublishCancelledByUserError, collectPackageRootCandidates, resolveApplicationPackageRoot } from '../deploy/packageResolver';
+import { buildPropertyMap, makeExpander, type ExpandResult } from '../project/msbuildPropertyExpander';
+import {
+	PublishCancelledByUserError,
+	collectPackageRootCandidates,
+	resolveApplicationPackageRoot,
+	type AnnotatedHit,
+	type OverrideTypeMismatch,
+	type PackageRootCandidate,
+	type ProbeFs,
+} from '../deploy/packageResolver';
 import { runTier2Prompt } from '../deploy/tier2Prompt';
 import { evaluateMsbuildPackageCandidates } from '../project/msbuildPropertyEvaluator';
 import {
@@ -15,418 +22,475 @@ import {
 	detectClusterConnectionFailure,
 	parseApplicationParameterFile,
 	parsePublishProfile,
+	type PublishProfileSummary,
 } from '../deploy/deployScript';
 import { runPowerShell } from '../cluster/powerShellRunner';
 import { SfRestClient } from '../cluster/sfRestClient';
+import type { ConnectionStore } from '../cluster/connectionStore';
+import type { LocalClusterManager } from '../cluster/localCluster';
+import type { AutoAttachTelemetry } from '../debug/autoAttachState';
+import type { Logger } from '../util/logger';
 
-async function publishApplication(e, t, r, n, i, o, s) {
+/** Absolute paths of the parameter files a publish profile pairs with. */
+interface ProfileParameterFiles {
+	applicationParameterFileAbs?: string;
+	startupServiceParameterFileAbs?: string;
+}
+
+/**
+ * `serviceFabric.publish`: restore NuGet packages, run the `Package` target,
+ * locate the application package, probe the cluster and invoke the project's
+ * `Deploy-FabricApplication.ps1` the way Visual Studio does. On success,
+ * optionally hands off to the auto-attach flow.
+ *
+ * `workspaceState` gates both the Tier 2 prompt and auto-attach; `telemetry`
+ * is only needed for auto-attach.
+ */
+export async function publishApplication(
+	watcher: ProjectLookup,
+	connections: ConnectionStore,
+	localCluster: LocalClusterManager,
+	logger: Logger,
+	target?: ProjectCommandTarget,
+	workspaceState?: vscode.Memento,
+	telemetry?: AutoAttachTelemetry,
+): Promise<void> {
 	if (process.platform !== 'win32') {
 		vscode.window.showWarningMessage('Deploy is supported on Windows only \u2014 the Service Fabric SDK is required.');
 		return;
 	}
-	let a = await resolveTargetProject(e, i);
-	if (!a) return;
-	let c = await pickPublishProfile(a.publishProfiles);
-	if (!c) return;
-	let l = await validatePublishProfileParameterFiles(c, n),
-		u = await pickApplicationParameterFile(a.applicationParameters, l.applicationParameterFileAbs);
-	(n.show(), n.info('Restoring NuGet packages...'));
-	let p = await vscode.window.withProgress(
-		{
-			location: vscode.ProgressLocation.Notification,
-			title: 'Service Fabric: restoring NuGet packages\u2026',
-		},
-		(x) =>
-			ensureNugetRestored(a.sfproj.path, {
-				output: n.outputChannel,
-				progress: x,
-			}),
+	const project = await resolveTargetProject(watcher, target);
+	if (!project) return;
+	const publishProfile = await pickPublishProfile(project.publishProfiles);
+	if (!publishProfile) return;
+	const pairedFiles = await validatePublishProfileParameterFiles(publishProfile, logger);
+	const appParamFile = await pickApplicationParameterFile(project.applicationParameters, pairedFiles.applicationParameterFileAbs);
+
+	logger.show();
+	logger.info('Restoring NuGet packages...');
+	const restore = await vscode.window.withProgress(
+		{ location: vscode.ProgressLocation.Notification, title: 'Service Fabric: restoring NuGet packages\u2026' },
+		(progress) => ensureNugetRestored(project.sfproj.path, { output: logger.outputChannel, progress }),
 	);
-	if (!p.ok) {
-		(n.error(`NuGet restore failed (${p.strategy}): ${p.message ?? 'no details'}`),
-			await vscode.window.showErrorMessage(`Service Fabric: NuGet restore failed. ${p.message ?? ''}`, {
-				modal: !0,
-			}));
+	if (!restore.ok) {
+		logger.error(`NuGet restore failed (${restore.strategy}): ${restore.message ?? 'no details'}`);
+		await vscode.window.showErrorMessage(`Service Fabric: NuGet restore failed. ${restore.message ?? ''}`, { modal: true });
 		return;
 	}
-	(p.strategy !== 'skipped' && n.info(`NuGet restore succeeded via ${p.strategy}.`), n.info('Packaging application...'));
-	let d = await createSfBuildTask(a.sfproj.path, 'Package'),
-		f = await vscode.tasks.executeTask(d);
-	await new Promise((x, V) => {
-		let Se = vscode.tasks.onDidEndTaskProcess((Ee) => {
-			Ee.execution === f && (Se.dispose(), Ee.exitCode === 0 ? x() : V(new Error(`Package failed with exit code ${Ee.exitCode}.`)));
+	if (restore.strategy !== 'skipped') logger.info(`NuGet restore succeeded via ${restore.strategy}.`);
+
+	logger.info('Packaging application...');
+	const packageTask = await createSfBuildTask(project.sfproj.path, 'Package');
+	const execution = await vscode.tasks.executeTask(packageTask);
+	await new Promise<void>((resolve, reject) => {
+		const sub = vscode.tasks.onDidEndTaskProcess((e) => {
+			if (e.execution === execution) {
+				sub.dispose();
+				if (e.exitCode === 0) resolve();
+				else reject(new Error(`Package failed with exit code ${e.exitCode}.`));
+			}
 		});
 	});
-	let m = a.scripts.find((x) => /Deploy-FabricApplication\.ps1$/i.test(x));
-	if (!m || !(await pathExists(m))) {
+
+	const deployScript = project.scripts.find((s) => /Deploy-FabricApplication\.ps1$/i.test(s));
+	if (!deployScript || !(await pathExists(deployScript))) {
 		vscode.window.showErrorMessage(
 			'Deploy-FabricApplication.ps1 not found under Scripts/. Restore the script from a Visual Studio template.',
 		);
 		return;
 	}
-	let v = path.join(a.sfproj.directory, 'pkg', 'Debug'),
-		h = 'Debug',
-		P = buildPropertyMap({
-			propertyGroups: a.sfproj.propertyGroups,
-			intrinsics: a.sfproj.intrinsics,
-			configuration: h,
-		}),
-		g = makeExpander(P),
-		w = new Set(),
-		b = (x) => {
-			if (!x) return x;
-			let V = g(x);
-			for (let Se of V.unresolved) w.add(Se);
-			return V.value;
+
+	// --- Locate the application package root ---------------------------------
+	const defaultPackageRoot = path.join(project.sfproj.directory, 'pkg', 'Debug');
+	const configuration = 'Debug';
+	const properties = buildPropertyMap({
+		propertyGroups: project.sfproj.propertyGroups,
+		intrinsics: project.sfproj.intrinsics,
+		configuration,
+	});
+	const expander = makeExpander(properties);
+	// Tier 1: `$(Property)` tokens the in-extension expander couldn't resolve.
+	const unresolved = new Set<string>();
+	const expandValue = (value: string | undefined): string | undefined => {
+		if (!value) return value;
+		const r = expander(value);
+		for (const token of r.unresolved) unresolved.add(token);
+		return r.value;
+	};
+	const expandForCandidate = (value: string): ExpandResult => {
+		const r = expander(value);
+		for (const token of r.unresolved) unresolved.add(token);
+		return r;
+	};
+	const packagePathSetting = vscode.workspace.getConfiguration('serviceFabric').get<string>('deploy.packagePath');
+	const searchMaxDepthSetting = vscode.workspace.getConfiguration('serviceFabric').get<number>('deploy.searchMaxDepth', 2);
+	let searchMaxDepth = 2;
+	if (Number.isInteger(searchMaxDepthSetting) && searchMaxDepthSetting >= 1 && searchMaxDepthSetting <= 16) {
+		searchMaxDepth = searchMaxDepthSetting;
+	} else if (searchMaxDepthSetting !== 2 && searchMaxDepthSetting !== undefined) {
+		logger.warn(`serviceFabric.deploy.searchMaxDepth=${searchMaxDepthSetting} is out of range [1, 16]; using default 2.`);
+	}
+	const candidates = collectPackageRootCandidates(
+		{
+			sfprojDir: project.sfproj.directory,
+			configuration,
+			outputPath: project.sfproj.outputPath,
+			packageLocation: project.sfproj.packageLocation,
+			settingOverride: expandValue(packagePathSetting),
+			expand: expandForCandidate,
 		},
-		S = (x) => {
-			let V = g(x);
-			for (let Se of V.unresolved) w.add(Se);
-			return V;
-		},
-		z = vscode.workspace.getConfiguration('serviceFabric').get('deploy.packagePath'),
-		O = vscode.workspace.getConfiguration('serviceFabric').get('deploy.searchMaxDepth', 2),
-		j = 2;
-	Number.isInteger(O) && O >= 1 && O <= 16
-		? (j = O)
-		: O !== 2 && O !== void 0 && n.warn(`serviceFabric.deploy.searchMaxDepth=${O} is out of range [1, 16]; using default 2.`);
-	let le = collectPackageRootCandidates(
-			{
-				sfprojDir: a.sfproj.directory,
-				configuration: h,
-				outputPath: a.sfproj.outputPath,
-				packageLocation: a.sfproj.packageLocation,
-				settingOverride: b(z),
-				expand: S,
-			},
-			path.join,
-			path.isAbsolute,
-		),
-		se = vscode.workspace.getConfiguration('serviceFabric').get('deploy.useMsbuildPropertyEvaluator', !1);
-	if (w.size > 0 && !se && o) {
-		let V = await runTier2Prompt(
+		path.join,
+		path.isAbsolute,
+	);
+
+	// Tier 2: offer to spawn MSBuild when Tier 1 left tokens unresolved.
+	let useEvaluator = vscode.workspace.getConfiguration('serviceFabric').get<boolean>('deploy.useMsbuildPropertyEvaluator', false);
+	if (unresolved.size > 0 && !useEvaluator && workspaceState) {
+		const decision = await runTier2Prompt(
 			{
 				isPromptSuppressedBySetting: () =>
-					vscode.workspace.getConfiguration('serviceFabric').get('deploy.suppressMsbuildEvaluatorPrompt', !1),
-				showPrompt: async (Se, Ee) =>
-					vscode.window.showWarningMessage(
-						Se,
-						{
-							modal: !0,
-						},
-						...Ee,
-					),
+					vscode.workspace.getConfiguration('serviceFabric').get<boolean>('deploy.suppressMsbuildEvaluatorPrompt', false),
+				showPrompt: async (message, buttons) => vscode.window.showWarningMessage(message, { modal: true }, ...buttons),
 				persistEvaluatorSetting: async () => {
 					await vscode.workspace
 						.getConfiguration('serviceFabric')
-						.update('deploy.useMsbuildPropertyEvaluator', !0, vscode.ConfigurationTarget.Workspace);
+						.update('deploy.useMsbuildPropertyEvaluator', true, vscode.ConfigurationTarget.Workspace);
 				},
-				logger: n,
+				logger,
 			},
-			{
-				sfprojPath: a.sfproj.path,
-				unresolvedTokens: w,
-			},
+			{ sfprojPath: project.sfproj.path, unresolvedTokens: unresolved },
 		);
-		if (V.cancelled) {
-			n.info('Publish cancelled by user \u2014 declined MSBuild property evaluator prompt.');
+		if (decision.cancelled) {
+			logger.info('Publish cancelled by user \u2014 declined MSBuild property evaluator prompt.');
 			return;
 		}
-		se = V.useEvaluator;
-	} else
-		w.size > 0 &&
-			n.info(
-				`Unresolved MSBuild properties in package-path candidates: ${[...w].map((x) => `$(${x})`).join(', ')}. ${se ? 'Tier 2 (MSBuild -getProperty) will attempt to resolve them.' : 'Resolution will fail unless serviceFabric.deploy.useMsbuildPropertyEvaluator is enabled or serviceFabric.deploy.packagePath is set to the package folder.'}`,
-			);
-	let Z = se ? () => evaluateMsbuildPackageCandidates(a.sfproj.path, h, n) : void 0,
-		ds = async (x) => {
-			let V = x.declaredApplicationTypeName ?? '<unreadable>',
-				Ee =
-					(await vscode.window.showWarningMessage(
-						`serviceFabric.deploy.packagePath points at a package whose ApplicationTypeName is '${V}', but the project declares '${x.expectedApplicationTypeName}'.
+		useEvaluator = decision.useEvaluator;
+	} else if (unresolved.size > 0) {
+		logger.info(
+			`Unresolved MSBuild properties in package-path candidates: ${[...unresolved].map((t) => `$(${t})`).join(', ')}. ${useEvaluator ? 'Tier 2 (MSBuild -getProperty) will attempt to resolve them.' : 'Resolution will fail unless serviceFabric.deploy.useMsbuildPropertyEvaluator is enabled or serviceFabric.deploy.packagePath is set to the package folder.'}`,
+		);
+	}
+	const evaluateMsbuildProperties = useEvaluator
+		? (): Promise<PackageRootCandidate[]> => evaluateMsbuildPackageCandidates(project.sfproj.path, configuration, logger)
+		: undefined;
+	const onOverrideTypeMismatch = async (info: OverrideTypeMismatch): Promise<boolean> => {
+		const declared = info.declaredApplicationTypeName ?? '<unreadable>';
+		const proceed =
+			(await vscode.window.showWarningMessage(
+				`serviceFabric.deploy.packagePath points at a package whose ApplicationTypeName is '${declared}', but the project declares '${info.expectedApplicationTypeName}'.
 
-Path: ${x.path}
+Path: ${info.path}
 
 Continuing will publish the wrong application. This choice is not remembered.`,
-						{
-							modal: !0,
-						},
-						'Continue Publish',
-						'Cancel Publish',
-					)) === 'Continue Publish';
-			return (
-				n.info(
-					`Override application-type mismatch (declared='${V}', expected='${x.expectedApplicationTypeName}'): ` +
-						(Ee ? 'user chose Continue Publish.' : 'user chose Cancel Publish (or dismissed).'),
-				),
-				Ee
-			);
-		},
-		rn;
+				{ modal: true },
+				'Continue Publish',
+				'Cancel Publish',
+			)) === 'Continue Publish';
+		logger.info(
+			`Override application-type mismatch (declared='${declared}', expected='${info.expectedApplicationTypeName}'): ` +
+				(proceed ? 'user chose Continue Publish.' : 'user chose Cancel Publish (or dismissed).'),
+		);
+		return proceed;
+	};
+	let packagePath: string;
 	try {
-		let x = await resolveApplicationPackageRoot(le, createPackageResolverFs(), {
-			searchMaxDepth: j,
-			expectedApplicationTypeName: a.applicationManifest?.applicationTypeName,
-			onAmbiguous: (V) => pickAmbiguousPackage(V, n),
-			evaluateMsbuildProperties: Z,
-			onOverrideTypeMismatch: ds,
+		const resolved = await resolveApplicationPackageRoot(candidates, createPackageResolverFs(), {
+			searchMaxDepth,
+			expectedApplicationTypeName: project.applicationManifest?.applicationTypeName,
+			onAmbiguous: (hits) => pickAmbiguousPackage(hits, logger),
+			evaluateMsbuildProperties,
+			onOverrideTypeMismatch,
 		});
-		((rn = x.path), x.path !== v && n.info(`Resolved application package root: ${x.path} (via ${x.source})`));
-	} catch (x) {
-		if (x instanceof PublishCancelledByUserError) {
-			n.info('Publish cancelled by user \u2014 application type did not match.');
+		packagePath = resolved.path;
+		if (resolved.path !== defaultPackageRoot) {
+			logger.info(`Resolved application package root: ${resolved.path} (via ${resolved.source})`);
+		}
+	} catch (err) {
+		if (err instanceof PublishCancelledByUserError) {
+			logger.info('Publish cancelled by user \u2014 application type did not match.');
 			return;
 		}
-		(vscode.window.showErrorMessage(x.message), n.error(x.message));
+		vscode.window.showErrorMessage((err as Error).message);
+		logger.error((err as Error).message);
 		return;
 	}
-	let tr = t.getActive();
-	tr && tr.kind === 'local' && (await r.refresh(tr));
-	let nn;
-	if (u)
+
+	const activeBeforeDeploy = connections.getActive();
+	if (activeBeforeDeploy && activeBeforeDeploy.kind === 'local') await localCluster.refresh(activeBeforeDeploy);
+
+	let applicationParameter: Record<string, string> | undefined;
+	if (appParamFile) {
 		try {
-			let x = await fsp.readFile(u, 'utf8'),
-				V = parseApplicationParameterFile(x);
-			Object.keys(V).length > 0 &&
-				((nn = V), n.info(`Overriding ${Object.keys(V).length} application parameter(s) from ${path.basename(u)}.`));
-		} catch (x) {
-			vscode.window.showErrorMessage(`Failed to read application parameters from ${path.basename(u)}: ${x.message}`);
+			const xml = await fsp.readFile(appParamFile, 'utf8');
+			const parsed = parseApplicationParameterFile(xml);
+			if (Object.keys(parsed).length > 0) {
+				applicationParameter = parsed;
+				logger.info(`Overriding ${Object.keys(parsed).length} application parameter(s) from ${path.basename(appParamFile)}.`);
+			}
+		} catch (err) {
+			vscode.window.showErrorMessage(
+				`Failed to read application parameters from ${path.basename(appParamFile)}: ${(err as Error).message}`,
+			);
 			return;
 		}
-	let us = buildDeployWrapper({
-		applicationParameter: nn,
-		startupServicesFile: a.startupServicesManifest,
-	});
-	if (!(await ensureClusterReachableForDeploy(c, r, n))) return;
-	(a.startupServicesManifest
-		? n.info('StartupServices.xml found \u2014 services declared in it will be created after the application is registered.')
-		: n.info(
-				'No StartupServices.xml \u2014 only the application type will be registered and an empty application instance created. Add services in StartupServices.xml (or via "Add Service") to deploy them automatically.',
-			),
-		n.info(`Invoking ${m}`));
-	let St = await runPowerShell(
-		n,
-		us,
-		{
-			DeployScript: m,
-			PackagePath: rn,
-			PublishProfile: c,
-			...(a.startupServicesManifest
-				? {
-						StartupServicesFile: a.startupServicesManifest,
-					}
-				: {}),
-		},
-		void 0,
-		{
-			capture: !0,
-		},
-	);
-	if (St.exitCode === 0) {
-		vscode.window.showInformationMessage('Service Fabric deployment completed successfully.');
-		let x = t.getActive();
-		if ((x && (await r.refresh(x)), x && o && s && a.applicationManifest))
-			try {
-				let { maybeAutoAttachAfterDeploy: V } = await import('../debug/autoAttachAfterDeploy'),
-					Se = a.applicationManifest.applicationTypeName,
-					Ee = `fabric:/${Se.replace(/Type$/, '')}`;
-				await V(
-					{
-						applicationName: Ee,
-						applicationTypeName: Se,
-						clusterEndpoint: x.endpoint,
-						clusterKind: x.kind === 'local' ? 'local' : 'remote',
-						memento: o,
-					},
-					n,
-					s,
-				);
-			} catch (V) {
-				n.warn(`Auto-attach hook threw: ${V instanceof Error ? V.message : String(V)}`);
-			}
+	}
+	const wrapper = buildDeployWrapper({ applicationParameter, startupServicesFile: project.startupServicesManifest });
+	if (!(await ensureClusterReachableForDeploy(publishProfile, localCluster, logger))) return;
+	if (project.startupServicesManifest) {
+		logger.info('StartupServices.xml found \u2014 services declared in it will be created after the application is registered.');
 	} else {
-		let x = detectClusterConnectionFailure(St.output ?? '');
-		x
-			? (vscode.window.showErrorMessage(`Deployment failed (exit code ${St.exitCode}). ${x}`), n.error(x))
-			: vscode.window.showErrorMessage(`Deployment failed (exit code ${St.exitCode}). See the Service Fabric output channel.`);
+		logger.info(
+			'No StartupServices.xml \u2014 only the application type will be registered and an empty application instance created. Add services in StartupServices.xml (or via "Add Service") to deploy them automatically.',
+		);
+	}
+	logger.info(`Invoking ${deployScript}`);
+	const result = await runPowerShell(
+		logger,
+		wrapper,
+		{
+			DeployScript: deployScript,
+			PackagePath: packagePath,
+			PublishProfile: publishProfile,
+			...(project.startupServicesManifest ? { StartupServicesFile: project.startupServicesManifest } : {}),
+		},
+		undefined,
+		{ capture: true },
+	);
+	if (result.exitCode === 0) {
+		vscode.window.showInformationMessage('Service Fabric deployment completed successfully.');
+		const active = connections.getActive();
+		if (active) await localCluster.refresh(active);
+		if (active && workspaceState && telemetry && project.applicationManifest) {
+			try {
+				const { maybeAutoAttachAfterDeploy } = await import('../debug/autoAttachAfterDeploy');
+				const applicationTypeName = project.applicationManifest.applicationTypeName;
+				const applicationName = `fabric:/${applicationTypeName.replace(/Type$/, '')}`;
+				await maybeAutoAttachAfterDeploy(
+					{
+						applicationName,
+						applicationTypeName,
+						clusterEndpoint: active.endpoint,
+						clusterKind: active.kind === 'local' ? 'local' : 'remote',
+						memento: workspaceState,
+					},
+					logger,
+					telemetry,
+				);
+			} catch (err) {
+				logger.warn(`Auto-attach hook threw: ${err instanceof Error ? err.message : String(err)}`);
+			}
+		}
+	} else {
+		const diagnostic = detectClusterConnectionFailure(result.output ?? '');
+		if (diagnostic) {
+			vscode.window.showErrorMessage(`Deployment failed (exit code ${result.exitCode}). ${diagnostic}`);
+			logger.error(diagnostic);
+		} else {
+			vscode.window.showErrorMessage(`Deployment failed (exit code ${result.exitCode}). See the Service Fabric output channel.`);
+		}
 	}
 }
 
-async function ensureClusterReachableForDeploy(e, t, r) {
-	let n;
+/**
+ * Pre-flight: probe the HTTP gateway inferred from the publish profile. A
+ * profile that can't be parsed, or has no inferable gateway, skips the probe.
+ * On failure, local profiles get a "Start Local Cluster" offer; any profile
+ * can be force-continued. Returns `false` to abort the deploy.
+ */
+async function ensureClusterReachableForDeploy(
+	publishProfile: string,
+	_localCluster: LocalClusterManager,
+	logger: Logger,
+): Promise<boolean> {
+	let profile: PublishProfileSummary;
 	try {
-		let a = await fsp.readFile(e, 'utf8');
-		n = parsePublishProfile(a);
-	} catch (a) {
-		return (r.warn(`Skipping cluster probe \u2014 failed to parse publish profile: ${a.message}`), !0);
+		const xml = await fsp.readFile(publishProfile, 'utf8');
+		profile = parsePublishProfile(xml);
+	} catch (err) {
+		logger.warn(`Skipping cluster probe \u2014 failed to parse publish profile: ${(err as Error).message}`);
+		return true;
 	}
-	let i = n.httpGatewayUrl;
-	if (!i) return (r.warn('Skipping cluster probe \u2014 no HTTP gateway could be inferred from the publish profile.'), !0);
-	r.info(`Probing cluster gateway ${i}...`);
-	let o = new SfRestClient(i);
+	const gateway = profile.httpGatewayUrl;
+	if (!gateway) {
+		logger.warn('Skipping cluster probe \u2014 no HTTP gateway could be inferred from the publish profile.');
+		return true;
+	}
+	logger.info(`Probing cluster gateway ${gateway}...`);
+	const client = new SfRestClient(gateway);
 	try {
-		return (await o.getClusterHealth(5e3), r.info('Cluster probe ok.'), !0);
-	} catch (a) {
-		r.warn(`Cluster probe failed: ${a.message}`);
+		await client.getClusterHealth(5000);
+		logger.info('Cluster probe ok.');
+		return true;
+	} catch (err) {
+		logger.warn(`Cluster probe failed: ${(err as Error).message}`);
 	}
-	if (n.isLocal) {
-		let a = await vscode.window.showErrorMessage(
-			`Local Service Fabric cluster at ${i} isn't responding. The deploy script needs an active cluster connection.`,
-			{
-				modal: !0,
-			},
+	if (profile.isLocal) {
+		const choice = await vscode.window.showErrorMessage(
+			`Local Service Fabric cluster at ${gateway} isn't responding. The deploy script needs an active cluster connection.`,
+			{ modal: true },
 			'Start Local Cluster',
 			'Continue Anyway',
 		);
-		if (a === 'Start Local Cluster') {
+		if (choice === 'Start Local Cluster') {
 			await vscode.commands.executeCommand('serviceFabric.cluster.startLocal');
 			try {
-				return (await o.getClusterHealth(1e4), r.info('Cluster probe ok after start.'), !0);
-			} catch (c) {
-				return (vscode.window.showErrorMessage(`Cluster still unreachable after start: ${c.message}. Aborting deploy.`), !1);
+				await client.getClusterHealth(10000);
+				logger.info('Cluster probe ok after start.');
+				return true;
+			} catch (err) {
+				vscode.window.showErrorMessage(`Cluster still unreachable after start: ${(err as Error).message}. Aborting deploy.`);
+				return false;
 			}
 		}
-		return a === 'Continue Anyway' ? (r.warn('Continuing deploy despite cluster probe failure (user override).'), !0) : !1;
+		if (choice === 'Continue Anyway') {
+			logger.warn('Continuing deploy despite cluster probe failure (user override).');
+			return true;
+		}
+		return false;
 	}
 	return (
 		(await vscode.window.showErrorMessage(
-			`Service Fabric cluster at ${i} isn't responding. Verify the publish profile's ClusterConnectionParameters and certificate settings.`,
-			{
-				modal: !0,
-			},
+			`Service Fabric cluster at ${gateway} isn't responding. Verify the publish profile's ClusterConnectionParameters and certificate settings.`,
+			{ modal: true },
 			'Continue Anyway',
 		)) === 'Continue Anyway'
 	);
 }
 
-async function pickPublishProfile(e) {
-	if (e.length === 0) {
+/** The only profile when there is one; otherwise a QuickPick. */
+async function pickPublishProfile(profiles: string[]): Promise<string | undefined> {
+	if (profiles.length === 0) {
 		vscode.window.showErrorMessage('No publish profiles found under PublishProfiles/.');
-		return;
+		return undefined;
 	}
-	return e.length === 1
-		? e[0]
-		: (
-				await vscode.window.showQuickPick(
-					e.map((r) => ({
-						label: path.basename(r),
-						description: r,
-						value: r,
-					})),
-					{
-						placeHolder: 'Select a publish profile',
-					},
-				)
-			)?.value;
+	if (profiles.length === 1) return profiles[0];
+	const picked = await vscode.window.showQuickPick(
+		profiles.map((p) => ({ label: path.basename(p), description: p, value: p })),
+		{ placeHolder: 'Select a publish profile' },
+	);
+	return picked?.value;
 }
 
-async function pickApplicationParameterFile(e, t) {
-	if (e.length === 0) return;
-	let r = vscode.workspace.getConfiguration('serviceFabric').get('deploy.promptForApplicationParameters') ?? !1;
-	if (t && !r) return;
-	if (e.length === 1 && !r) return e[0];
-	let n = [
+/**
+ * Optional override of the publish profile's own ApplicationParameterFile.
+ * Only prompts when `serviceFabric.deploy.promptForApplicationParameters` is
+ * on, or when the profile pairs with no file and there are several to choose
+ * from. `undefined` means "use the profile default".
+ */
+async function pickApplicationParameterFile(files: string[], pairedFile: string | undefined): Promise<string | undefined> {
+	if (files.length === 0) return undefined;
+	const alwaysPrompt = vscode.workspace.getConfiguration('serviceFabric').get<boolean>('deploy.promptForApplicationParameters') ?? false;
+	if (pairedFile && !alwaysPrompt) return undefined;
+	if (files.length === 1 && !alwaysPrompt) return files[0];
+	const items: (vscode.QuickPickItem & { value: string | undefined })[] = [
 		{
 			label: '$(circle-slash) (none \u2014 use publish profile default)',
-			description: t ? `From profile: ${path.basename(t)}` : 'Use ApplicationParameterFile referenced by the publish profile',
-			value: void 0,
-			picked: !0,
+			description: pairedFile
+				? `From profile: ${path.basename(pairedFile)}`
+				: 'Use ApplicationParameterFile referenced by the publish profile',
+			value: undefined,
+			picked: true,
 		},
-		...e.map((o) => ({
-			label: path.basename(o),
-			description: o,
-			value: o,
-			picked: t !== void 0 && path.normalize(o).toLowerCase() === path.normalize(t).toLowerCase(),
+		...files.map((f) => ({
+			label: path.basename(f),
+			description: f,
+			value: f,
+			picked: pairedFile !== undefined && path.normalize(f).toLowerCase() === path.normalize(pairedFile).toLowerCase(),
 		})),
 	];
-	return (
-		await vscode.window.showQuickPick(n, {
-			placeHolder: 'Override application parameter file (advanced \u2014 leave default to use the file paired with the publish profile)',
-		})
-	)?.value;
+	const picked = await vscode.window.showQuickPick(items, {
+		placeHolder: 'Override application parameter file (advanced \u2014 leave default to use the file paired with the publish profile)',
+	});
+	return picked?.value;
 }
 
-async function validatePublishProfileParameterFiles(e, t) {
-	let r;
+/**
+ * Resolve the publish profile's `<ApplicationParameterFile>` /
+ * `<StartupServiceParameterFile>` against its directory and log whether
+ * each exists. Returns `{}` when the profile can't be read.
+ */
+async function validatePublishProfileParameterFiles(publishProfile: string, logger: Logger): Promise<ProfileParameterFiles> {
+	let xml: string;
 	try {
-		r = await fsp.readFile(e, 'utf8');
-	} catch (c) {
-		return (t.warn(`Could not read publish profile ${path.basename(e)} for parameter-file validation: ${c.message}`), {});
+		xml = await fsp.readFile(publishProfile, 'utf8');
+	} catch (err) {
+		logger.warn(`Could not read publish profile ${path.basename(publishProfile)} for parameter-file validation: ${(err as Error).message}`);
+		return {};
 	}
-	let n = parsePublishProfile(r),
-		i = path.dirname(e),
-		o = (c) => {
-			if (c) return path.isAbsolute(c) ? c : path.resolve(i, c);
-		},
-		s = o(n.applicationParameterFile),
-		a = o(n.startupServiceParameterFile);
-	return (
-		n.applicationParameterFile
-			? (s ? await pathExists(s) : !1)
-				? t.info(`Publish profile pairs with ApplicationParameterFile: ${path.basename(s)} (${n.applicationParameterFile}).`)
-				: t.warn(
-						`Publish profile references missing ApplicationParameterFile: ${n.applicationParameterFile} (resolved to ${s}). Deploy will likely fail or fall back to manifest defaults.`,
-					)
-			: t.info('Publish profile has no <ApplicationParameterFile> \u2014 manifest defaults will be used.'),
-		n.startupServiceParameterFile &&
-			((a ? await pathExists(a) : !1)
-				? t.info(`Publish profile pairs with StartupServiceParameterFile: ${path.basename(a)} (${n.startupServiceParameterFile}).`)
-				: t.warn(
-						`Publish profile references missing StartupServiceParameterFile: ${n.startupServiceParameterFile} (resolved to ${a}). StartupServices.xml defaults will be used.`,
-					)),
-		{
-			applicationParameterFileAbs: s,
-			startupServiceParameterFileAbs: a,
+	const profile = parsePublishProfile(xml);
+	const profileDir = path.dirname(publishProfile);
+	const toAbs = (p: string | undefined): string | undefined => {
+		if (p) return path.isAbsolute(p) ? p : path.resolve(profileDir, p);
+		return undefined;
+	};
+	const appParamAbs = toAbs(profile.applicationParameterFile);
+	const startupParamAbs = toAbs(profile.startupServiceParameterFile);
+	if (profile.applicationParameterFile) {
+		if (appParamAbs ? await pathExists(appParamAbs) : false) {
+			logger.info(
+				`Publish profile pairs with ApplicationParameterFile: ${path.basename(appParamAbs!)} (${profile.applicationParameterFile}).`,
+			);
+		} else {
+			logger.warn(
+				`Publish profile references missing ApplicationParameterFile: ${profile.applicationParameterFile} (resolved to ${appParamAbs}). Deploy will likely fail or fall back to manifest defaults.`,
+			);
 		}
-	);
+	} else {
+		logger.info('Publish profile has no <ApplicationParameterFile> \u2014 manifest defaults will be used.');
+	}
+	if (profile.startupServiceParameterFile) {
+		if (startupParamAbs ? await pathExists(startupParamAbs) : false) {
+			logger.info(
+				`Publish profile pairs with StartupServiceParameterFile: ${path.basename(startupParamAbs!)} (${profile.startupServiceParameterFile}).`,
+			);
+		} else {
+			logger.warn(
+				`Publish profile references missing StartupServiceParameterFile: ${profile.startupServiceParameterFile} (resolved to ${startupParamAbs}). StartupServices.xml defaults will be used.`,
+			);
+		}
+	}
+	return { applicationParameterFileAbs: appParamAbs, startupServiceParameterFileAbs: startupParamAbs };
 }
 
-function createPackageResolverFs() {
+/** Real-filesystem `ProbeFs` for the package resolver. */
+function createPackageResolverFs(): ProbeFs {
 	return {
-		async pathExists(e) {
-			return pathExists(e);
+		async pathExists(p) {
+			return pathExists(p);
 		},
-		async readDirectories(e) {
+		async readDirectories(p) {
 			try {
-				return (
-					await fsp.readdir(e, {
-						withFileTypes: !0,
-					})
-				)
-					.filter((r) => r.isDirectory())
-					.map((r) => r.name);
+				return (await fsp.readdir(p, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name);
 			} catch {
 				return [];
 			}
 		},
-		async readApplicationTypeName(e) {
+		async readApplicationTypeName(manifestPath) {
 			try {
-				let t = await fsp.readFile(e, 'utf8');
-				return /<ApplicationManifest\b[^>]*\bApplicationTypeName\s*=\s*["']([^"']+)["']/i.exec(t)?.[1];
+				const xml = await fsp.readFile(manifestPath, 'utf8');
+				return /<ApplicationManifest\b[^>]*\bApplicationTypeName\s*=\s*["']([^"']+)["']/i.exec(xml)?.[1];
 			} catch {
-				return;
+				return undefined;
 			}
 		},
 	};
 }
 
-async function pickAmbiguousPackage(e, t) {
-	t.info(
-		`Multiple application packages found \u2014 prompting user to pick: ${e.map((i) => `${path.basename(i.path)}${i.applicationTypeName ? ` [${i.applicationTypeName}]` : ''}`).join(', ')}`,
+/** `onAmbiguous` hook: let the user pick among several discovered packages. */
+async function pickAmbiguousPackage(hits: AnnotatedHit[], logger: Logger): Promise<string | undefined> {
+	logger.info(
+		`Multiple application packages found \u2014 prompting user to pick: ${hits.map((h) => `${path.basename(h.path)}${h.applicationTypeName ? ` [${h.applicationTypeName}]` : ''}`).join(', ')}`,
 	);
-	let r = e.map((i) => ({
-		label: path.basename(i.path),
-		description: i.applicationTypeName ? `ApplicationTypeName: ${i.applicationTypeName}` : 'ApplicationTypeName: (unreadable)',
-		detail: i.path,
-		value: i.path,
+	const items = hits.map((h) => ({
+		label: path.basename(h.path),
+		description: h.applicationTypeName ? `ApplicationTypeName: ${h.applicationTypeName}` : 'ApplicationTypeName: (unreadable)',
+		detail: h.path,
+		value: h.path,
 	}));
-	return (
-		await vscode.window.showQuickPick(r, {
-			placeHolder: 'Multiple application packages found \u2014 pick the one to deploy',
-			matchOnDescription: !0,
-			matchOnDetail: !0,
-		})
-	)?.value;
+	const picked = await vscode.window.showQuickPick(items, {
+		placeHolder: 'Multiple application packages found \u2014 pick the one to deploy',
+		matchOnDescription: true,
+		matchOnDetail: true,
+	});
+	return picked?.value;
 }
-
-export { publishApplication };

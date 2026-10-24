@@ -1,23 +1,25 @@
-// @ts-nocheck
 import * as vscode from 'vscode';
+import type { SfProjectWatcher } from '../project/projectWatcher';
 import { findAttributeOccurrences } from '../util/xmlText';
 
-var ManifestDefinitionProvider = class {
-	constructor(t) {
-		this.watcher = t;
-	}
-	provideDefinition(t, r) {
-		if (!t.uri.fsPath.toLowerCase().endsWith('applicationmanifest.xml')) return;
-		let i = this.watcher.getProjects().find((u) => u.applicationManifest?.path === t.uri.fsPath);
-		if (!i) return;
-		let o = t.getText(),
-			s = findAttributeOccurrences(o, 'ServiceManifestRef', 'ServiceManifestName'),
-			a = t.offsetAt(r),
-			c = s.find((u) => a >= u.valueRange.start && a <= u.valueRange.end);
-		if (!c) return;
-		let l = i.serviceManifests.find((u) => u.name === c.value);
-		if (l) return new vscode.Location(vscode.Uri.file(l.path), new vscode.Position(0, 0));
-	}
-};
+/**
+ * Go-to-definition from `<ServiceManifestRef ServiceManifestName="...">` in
+ * ApplicationManifest.xml to the matching on-disk ServiceManifest.xml.
+ */
+export class ManifestDefinitionProvider implements vscode.DefinitionProvider {
+	constructor(private readonly watcher: SfProjectWatcher) {}
 
-export { ManifestDefinitionProvider };
+	provideDefinition(document: vscode.TextDocument, position: vscode.Position): vscode.Location | undefined {
+		if (!document.uri.fsPath.toLowerCase().endsWith('applicationmanifest.xml')) return undefined;
+		const project = this.watcher.getProjects().find((p) => p.applicationManifest?.path === document.uri.fsPath);
+		if (!project) return undefined;
+		const text = document.getText();
+		const refs = findAttributeOccurrences(text, 'ServiceManifestRef', 'ServiceManifestName');
+		const offset = document.offsetAt(position);
+		const hit = refs.find((r) => offset >= r.valueRange.start && offset <= r.valueRange.end);
+		if (!hit) return undefined;
+		const sm = project.serviceManifests.find((s) => s.name === hit.value);
+		if (sm) return new vscode.Location(vscode.Uri.file(sm.path), new vscode.Position(0, 0));
+		return undefined;
+	}
+}

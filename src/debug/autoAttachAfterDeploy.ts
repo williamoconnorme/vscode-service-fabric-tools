@@ -1,93 +1,141 @@
-// @ts-nocheck
 import * as vscode from 'vscode';
+import type { ClusterKind } from '../cluster/connectionStore';
 import { SfRestClient } from '../cluster/sfRestClient';
 import { ensureDebuggerAvailable } from './attachCommand';
-import { runAutoAttach } from './autoAttachState';
+import {
+	runAutoAttach,
+	type AutoAttachContext,
+	type AutoAttachHost,
+	type AutoAttachLogger,
+	type AutoAttachSetting,
+	type AutoAttachTelemetry,
+	type AutoAttachTelemetryProperties,
+	type FirstDeployPromptChoice,
+} from './autoAttachState';
 
-async function maybeAutoAttachAfterDeploy(e, t, r) {
-	let n = vscode.workspace.getConfiguration('serviceFabric'),
-		i = clampNumber(
-			n.get(AUTO_ATTACH_READY_TIMEOUT_KEY) ?? DEFAULT_AUTO_ATTACH_READY_TIMEOUT_SEC,
-			5,
-			300,
-			DEFAULT_AUTO_ATTACH_READY_TIMEOUT_SEC,
-		),
-		o = clampNumber(n.get(AUTO_ATTACH_MAX_SESSIONS_KEY) ?? DEFAULT_AUTO_ATTACH_MAX_SESSIONS, 1, 50, DEFAULT_AUTO_ATTACH_MAX_SESSIONS),
-		s = new SfRestClient(e.clusterEndpoint),
-		a = {
-			applicationName: e.applicationName,
-			applicationTypeName: e.applicationTypeName,
-			clusterEndpoint: e.clusterEndpoint,
-			clusterKind: e.clusterKind,
+/** What the Publish command knows about the application it just deployed. */
+export interface AutoAttachDeployInfo {
+	applicationName: string;
+	applicationTypeName: string;
+	clusterEndpoint: string;
+	clusterKind: ClusterKind;
+	/** Workspace-state Memento holding the one-shot and prompt-shown flags. */
+	memento: vscode.Memento;
+}
+
+/** The slice of the extension logger the auto-attach glue uses. */
+export interface AutoAttachDeployLogger extends AutoAttachLogger {
+	readonly outputChannel: vscode.OutputChannel;
+}
+
+const AUTO_ATTACH_SETTING_KEY = 'debug.autoAttachOnPublish';
+const AUTO_ATTACH_MAX_SESSIONS_KEY = 'debug.autoAttachMaxSessions';
+const AUTO_ATTACH_READY_TIMEOUT_KEY = 'debug.autoAttachReadyTimeoutSec';
+const DEFAULT_AUTO_ATTACH_MAX_SESSIONS = 5;
+const DEFAULT_AUTO_ATTACH_READY_TIMEOUT_SEC = 30;
+const AUTO_ATTACH_POLL_INTERVAL_MS = 1000;
+const FIRST_DEPLOY_PROMPT_YES = 'Yes';
+const FIRST_DEPLOY_PROMPT_NOT_NOW = 'Not now';
+const FIRST_DEPLOY_PROMPT_DONT_ASK = "Don't ask again";
+
+/**
+ * Called after a successful Publish: binds `runAutoAttach` to the live VS Code
+ * settings, Memento, UI and the cluster gateway. Never throws — orchestrator
+ * failures are logged as warnings.
+ */
+export async function maybeAutoAttachAfterDeploy(
+	info: AutoAttachDeployInfo,
+	logger: AutoAttachDeployLogger,
+	telemetry: AutoAttachTelemetry,
+): Promise<void> {
+	const config = vscode.workspace.getConfiguration('serviceFabric');
+	const readyTimeoutSec = clampNumber(
+		config.get<number>(AUTO_ATTACH_READY_TIMEOUT_KEY) ?? DEFAULT_AUTO_ATTACH_READY_TIMEOUT_SEC,
+		5,
+		300,
+		DEFAULT_AUTO_ATTACH_READY_TIMEOUT_SEC,
+	);
+	const maxSessions = clampNumber(
+		config.get<number>(AUTO_ATTACH_MAX_SESSIONS_KEY) ?? DEFAULT_AUTO_ATTACH_MAX_SESSIONS,
+		1,
+		50,
+		DEFAULT_AUTO_ATTACH_MAX_SESSIONS,
+	);
+	const client = new SfRestClient(info.clusterEndpoint);
+	const ctx: AutoAttachContext = {
+		applicationName: info.applicationName,
+		applicationTypeName: info.applicationTypeName,
+		clusterEndpoint: info.clusterEndpoint,
+		clusterKind: info.clusterKind,
+	};
+	const host: AutoAttachHost = {
+		readyTimeoutMs: readyTimeoutSec * 1000,
+		maxSessions,
+		pollIntervalMs: AUTO_ATTACH_POLL_INTERVAL_MS,
+		getSetting: () => readAutoAttachSetting(),
+		updateSetting: async (value) => {
+			await vscode.workspace.getConfiguration('serviceFabric').update(AUTO_ATTACH_SETTING_KEY, value, vscode.ConfigurationTarget.Workspace);
 		},
-		c = {
-			readyTimeoutMs: i * 1e3,
-			maxSessions: o,
-			pollIntervalMs: AUTO_ATTACH_POLL_INTERVAL_MS,
-			getSetting: () => readAutoAttachSetting(),
-			updateSetting: async (p) => {
-				await vscode.workspace.getConfiguration('serviceFabric').update(AUTO_ATTACH_SETTING_KEY, p, vscode.ConfigurationTarget.Workspace);
-			},
-			getMementoFlag: (p) => e.memento.get(p) === !0,
-			setMementoFlag: async (p, d) => {
-				await e.memento.update(p, d);
-			},
-			showFirstDeployPrompt: () => showFirstDeployAutoAttachPrompt(),
-			showInfo: (p) => {
-				vscode.window.showInformationMessage(p);
-			},
-			showWarning: async (p, ...d) => vscode.window.showWarningMessage(p, ...d),
-			showOutputChannel: () => t.outputChannel.show(!0),
-			ensureDebuggerAvailable: () => ensureDebuggerAvailable('coreclr', t),
-			listServices: (p) => s.listServices(p),
-			listReplicas: (p) => s.listReplicas(p),
-			getNodeNames: async () => {
-				try {
-					return (await s.getNodes()).map((d) => d.name);
-				} catch (p) {
-					return (t.warn(`Auto-attach: failed to enumerate cluster nodes: ${p instanceof Error ? p.message : String(p)}`), []);
-				}
-			},
-			getDeployedCodePackages: (p, d) => s.getDeployedCodePackages(p, d),
-			startDebugging: (p) => Promise.resolve(vscode.debug.startDebugging(void 0, p)),
-			sleep: (p) => new Promise((d) => setTimeout(d, p)),
+		getMementoFlag: (key) => info.memento.get(key) === true,
+		setMementoFlag: async (key, value) => {
+			await info.memento.update(key, value);
 		},
-		l = {
-			event: (p, d) => r.event(p, d),
+		showFirstDeployPrompt: () => showFirstDeployAutoAttachPrompt(),
+		showInfo: (message) => {
+			vscode.window.showInformationMessage(message);
 		},
-		u = {
-			info: (p) => t.info(p),
-			warn: (p) => t.warn(p),
-			error: (p, d) => t.error(p, d),
-			debug: (p) => t.debug(p),
-		};
+		showWarning: async (message, ...items) => vscode.window.showWarningMessage(message, ...items),
+		showOutputChannel: () => logger.outputChannel.show(true),
+		ensureDebuggerAvailable: () => ensureDebuggerAvailable('coreclr', logger),
+		listServices: (applicationName) => client.listServices(applicationName),
+		listReplicas: (serviceId) => client.listReplicas(serviceId),
+		getNodeNames: async () => {
+			try {
+				return (await client.getNodes()).map((n) => n.name);
+			} catch (err) {
+				logger.warn(`Auto-attach: failed to enumerate cluster nodes: ${err instanceof Error ? err.message : String(err)}`);
+				return [];
+			}
+		},
+		getDeployedCodePackages: (applicationName, nodeNames) => client.getDeployedCodePackages(applicationName, nodeNames),
+		startDebugging: (debugConfig) => Promise.resolve(vscode.debug.startDebugging(undefined, debugConfig)),
+		sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+	};
+	const telemetryAdapter: AutoAttachTelemetry = {
+		event: (name: string, properties?: AutoAttachTelemetryProperties) => telemetry.event(name, properties),
+	};
+	const loggerAdapter: AutoAttachLogger = {
+		info: (message) => logger.info(message),
+		warn: (message) => logger.warn(message),
+		error: (message, err) => logger.error(message, err),
+		debug: (message) => logger.debug(message),
+	};
 	try {
-		await runAutoAttach(c, a, u, l);
-	} catch (p) {
-		t.warn(`Auto-attach orchestrator threw: ${p instanceof Error ? p.message : String(p)}`);
+		await runAutoAttach(host, ctx, loggerAdapter, telemetryAdapter);
+	} catch (err) {
+		logger.warn(`Auto-attach orchestrator threw: ${err instanceof Error ? err.message : String(err)}`);
 	}
 }
 
-function readAutoAttachSetting() {
+function readAutoAttachSetting(): AutoAttachSetting {
 	return vscode.workspace.getConfiguration('serviceFabric').get(AUTO_ATTACH_SETTING_KEY) === 'localOnly' ? 'localOnly' : 'never';
 }
 
-function clampNumber(e, t, r, n) {
-	return Number.isFinite(e) ? (e < t ? t : e > r ? r : e) : n;
+/** Clamps `value` to `[min, max]`; non-finite values fall back to `fallback`. */
+function clampNumber(value: number, min: number, max: number, fallback: number): number {
+	if (!Number.isFinite(value)) return fallback;
+	return value < min ? min : value > max ? max : value;
 }
 
-async function showFirstDeployAutoAttachPrompt() {
-	switch (
-		await vscode.window.showInformationMessage(
-			'Service Fabric: Publish completed. Auto-attach the debugger after future local-cluster Publishes?',
-			{
-				modal: !0,
-			},
-			FIRST_DEPLOY_PROMPT_YES,
-			FIRST_DEPLOY_PROMPT_NOT_NOW,
-			FIRST_DEPLOY_PROMPT_DONT_ASK,
-		)
-	) {
+async function showFirstDeployAutoAttachPrompt(): Promise<FirstDeployPromptChoice | undefined> {
+	const pick = await vscode.window.showInformationMessage(
+		'Service Fabric: Publish completed. Auto-attach the debugger after future local-cluster Publishes?',
+		{ modal: true },
+		FIRST_DEPLOY_PROMPT_YES,
+		FIRST_DEPLOY_PROMPT_NOT_NOW,
+		FIRST_DEPLOY_PROMPT_DONT_ASK,
+	);
+	switch (pick) {
 		case FIRST_DEPLOY_PROMPT_YES:
 			return 'attach-once-localOnly';
 		case FIRST_DEPLOY_PROMPT_DONT_ASK:
@@ -95,36 +143,6 @@ async function showFirstDeployAutoAttachPrompt() {
 		case FIRST_DEPLOY_PROMPT_NOT_NOW:
 			return 'never-this-time';
 		default:
-			return;
+			return undefined;
 	}
 }
-
-let AUTO_ATTACH_SETTING_KEY,
-	AUTO_ATTACH_MAX_SESSIONS_KEY,
-	AUTO_ATTACH_READY_TIMEOUT_KEY,
-	DEFAULT_AUTO_ATTACH_MAX_SESSIONS,
-	DEFAULT_AUTO_ATTACH_READY_TIMEOUT_SEC,
-	AUTO_ATTACH_POLL_INTERVAL_MS,
-	FIRST_DEPLOY_PROMPT_YES,
-	FIRST_DEPLOY_PROMPT_NOT_NOW,
-	FIRST_DEPLOY_PROMPT_DONT_ASK;
-
-AUTO_ATTACH_SETTING_KEY = 'debug.autoAttachOnPublish';
-
-AUTO_ATTACH_MAX_SESSIONS_KEY = 'debug.autoAttachMaxSessions';
-
-AUTO_ATTACH_READY_TIMEOUT_KEY = 'debug.autoAttachReadyTimeoutSec';
-
-DEFAULT_AUTO_ATTACH_MAX_SESSIONS = 5;
-
-DEFAULT_AUTO_ATTACH_READY_TIMEOUT_SEC = 30;
-
-AUTO_ATTACH_POLL_INTERVAL_MS = 1e3;
-
-FIRST_DEPLOY_PROMPT_YES = 'Yes';
-
-FIRST_DEPLOY_PROMPT_NOT_NOW = 'Not now';
-
-FIRST_DEPLOY_PROMPT_DONT_ASK = "Don't ask again";
-
-export { maybeAutoAttachAfterDeploy };

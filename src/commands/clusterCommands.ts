@@ -1,173 +1,191 @@
-// @ts-nocheck
 import * as vscode from 'vscode';
+import type { ClusterConnection, ConnectionStore } from '../cluster/connectionStore';
+import type { LocalClusterManager } from '../cluster/localCluster';
 import { runPowerShell } from '../cluster/powerShellRunner';
+import type { Logger } from '../util/logger';
 
-async function pickNodeCount(e) {
-	let t = vscode.workspace.getConfiguration('serviceFabric').get('localCluster.nodeCount') ?? '5',
-		r = [
-			{
-				label: '1-node',
-				description: 'Fastest startup, no failover testing',
-				detail: 'Single replica per stateful service. Good for inner-loop development.',
-				value: '1',
-				picked: t === '1',
-			},
-			{
-				label: '5-node',
-				description: 'Failover, placement constraints, rolling upgrades',
-				detail: 'Five-replica primary cluster. Closer to production behaviour.',
-				value: '5',
-				picked: t === '5',
-			},
-		];
+/** Local dev cluster size, as stored in `serviceFabric.localCluster.nodeCount`. */
+export type LocalClusterNodeCount = '1' | '5';
+
+interface NodeCountPickItem extends vscode.QuickPickItem {
+	value: LocalClusterNodeCount;
+}
+
+/** Asks for 1-node vs 5-node mode, preselecting the `localCluster.nodeCount` setting. */
+async function pickNodeCount(prompt: string): Promise<LocalClusterNodeCount | undefined> {
+	const current = vscode.workspace.getConfiguration('serviceFabric').get<string>('localCluster.nodeCount') ?? '5';
+	const items: NodeCountPickItem[] = [
+		{
+			label: '1-node',
+			description: 'Fastest startup, no failover testing',
+			detail: 'Single replica per stateful service. Good for inner-loop development.',
+			value: '1',
+			picked: current === '1',
+		},
+		{
+			label: '5-node',
+			description: 'Failover, placement constraints, rolling upgrades',
+			detail: 'Five-replica primary cluster. Closer to production behaviour.',
+			value: '5',
+			picked: current === '5',
+		},
+	];
 	return (
-		await vscode.window.showQuickPick(r, {
-			placeHolder: `${e} 1-node or 5-node mode (current default: ${t}-node)`,
+		await vscode.window.showQuickPick(items, {
+			placeHolder: `${prompt} 1-node or 5-node mode (current default: ${current}-node)`,
 		})
 	)?.value;
 }
 
-async function connectLocalCluster(e) {
-	await e.connect();
+/** `serviceFabric.cluster.connectLocal` */
+export async function connectLocalCluster(local: LocalClusterManager): Promise<void> {
+	await local.connect();
 }
 
-async function connectRemoteCluster(e, t) {
-	let r = await vscode.window.showInputBox({
+/** `serviceFabric.cluster.connectRemote` */
+export async function connectRemoteCluster(store: ConnectionStore, local: LocalClusterManager): Promise<void> {
+	const endpoint = await vscode.window.showInputBox({
 		prompt: 'Enter Service Fabric HTTP gateway endpoint',
 		placeHolder: 'https://my-cluster.eastus.cloudapp.azure.com:19080',
-		validateInput: (o) => (/^https?:\/\//.test(o) ? null : 'Must start with http:// or https://'),
+		validateInput: (value) => (/^https?:\/\//.test(value) ? null : 'Must start with http:// or https://'),
 	});
-	if (!r) return;
-	let n = await vscode.window.showInputBox({
+	if (!endpoint) return;
+	const label = await vscode.window.showInputBox({
 		prompt: 'Display name for this cluster',
-		value: new URL(r).hostname,
+		value: new URL(endpoint).hostname,
 	});
-	if (!n) return;
-	let i = {
-		id: `remote:${r}`,
-		label: n,
-		endpoint: r,
+	if (!label) return;
+	const conn: ClusterConnection = {
+		id: `remote:${endpoint}`,
+		label,
+		endpoint,
 		kind: 'remote',
-		connected: !1,
+		connected: false,
 	};
-	(await e.upsert(i), await e.setActive(i.id), await t.refresh(i));
+	await store.upsert(conn);
+	await store.setActive(conn.id);
+	// LocalClusterManager.refresh probes any endpoint, not only the local one.
+	await local.refresh(conn);
 }
 
-async function disconnectCluster(e, t) {
-	let r = t ?? e.getActive();
-	r && (await e.remove(r.id));
+/** `serviceFabric.cluster.disconnect`: removes the given (or active) connection. */
+export async function disconnectCluster(store: ConnectionStore, connection?: ClusterConnection): Promise<void> {
+	const target = connection ?? store.getActive();
+	if (target) await store.remove(target.id);
 }
 
-async function selectActiveCluster(e) {
-	let t = e.list();
-	if (t.length === 0) {
+/** `serviceFabric.cluster.selectActive` */
+export async function selectActiveCluster(store: ConnectionStore): Promise<void> {
+	const connections = store.list();
+	if (connections.length === 0) {
 		vscode.window.showInformationMessage('No clusters configured. Use "Connect to Local Cluster" first.');
 		return;
 	}
-	let r = await vscode.window.showQuickPick(
-		t.map((n) => ({
-			label: n.label,
-			description: n.endpoint,
-			detail: n.connected ? 'Connected' : 'Disconnected',
-			id: n.id,
+	const picked = await vscode.window.showQuickPick(
+		connections.map((c) => ({
+			label: c.label,
+			description: c.endpoint,
+			detail: c.connected ? 'Connected' : 'Disconnected',
+			id: c.id,
 		})),
-		{
-			placeHolder: 'Select active Service Fabric cluster',
-		},
+		{ placeHolder: 'Select active Service Fabric cluster' },
 	);
-	r && (await e.setActive(r.id));
+	if (picked) await store.setActive(picked.id);
 }
 
-async function startLocalCluster(e, t) {
+/** `serviceFabric.cluster.startLocal`: runs the SDK's DevClusterSetup.ps1 (Windows only). */
+export async function startLocalCluster(logger: Logger, nodeCount?: LocalClusterNodeCount): Promise<void> {
 	if (process.platform !== 'win32') {
 		vscode.window.showWarningMessage('Local Service Fabric clusters are supported on Windows only.');
 		return;
 	}
-	let r = t ?? (await pickNodeCount('Start cluster as'));
-	if (!r) return;
-	let i = `
+	const mode = nodeCount ?? (await pickNodeCount('Start cluster as'));
+	if (!mode) return;
+	const script = `
 $ErrorActionPreference = 'Stop'
 $sdk = (Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Service Fabric SDK' -ErrorAction SilentlyContinue).FabricSDKInstallPath
 if (-not $sdk) { Write-Error 'Service Fabric SDK is not installed.'; exit 2 }
 $cluster = Join-Path $sdk 'ClusterSetup\\DevClusterSetup.ps1'
-& $cluster ${r === '1' ? '-CreateOneNodeCluster' : ''}
+& $cluster ${mode === '1' ? '-CreateOneNodeCluster' : ''}
 `;
-	(e.show(), e.info(`Starting ${r}-node local cluster...`), await runPowerShell(e, i, {}));
+	logger.show();
+	logger.info(`Starting ${mode}-node local cluster...`);
+	await runPowerShell(logger, script, {});
 }
 
-async function stopLocalCluster(e) {
+/** `serviceFabric.cluster.stopLocal`: stops FabricHostSvc (Windows only; silently a no-op elsewhere). */
+export async function stopLocalCluster(logger: Logger): Promise<void> {
 	if (process.platform !== 'win32') return;
-	let t = `
+	const script = `
 $ErrorActionPreference = 'Stop'
 Stop-Service FabricHostSvc -Force -ErrorAction SilentlyContinue
 `;
-	(e.show(), await runPowerShell(e, t, {}));
+	logger.show();
+	await runPowerShell(logger, script, {});
 }
 
-async function resetLocalCluster(e, t) {
+/**
+ * `serviceFabric.cluster.resetLocal`: cleans the dev cluster and sets it up again.
+ * Asks for confirmation when `serviceFabric.confirmDestructiveActions` is on. `nodeCount`
+ * skips the mode prompt (used by {@link switchLocalClusterMode}).
+ */
+export async function resetLocalCluster(logger: Logger, nodeCount?: LocalClusterNodeCount): Promise<void> {
+	if (process.platform !== 'win32') return;
 	if (
-		process.platform !== 'win32' ||
-		((vscode.workspace.getConfiguration('serviceFabric').get('confirmDestructiveActions') ?? !0) &&
-			(await vscode.window.showWarningMessage(
-				'Reset the local Service Fabric cluster? All deployed applications will be removed.',
-				{
-					modal: !0,
-				},
-				'Reset',
-			)) !== 'Reset')
-	)
+		(vscode.workspace.getConfiguration('serviceFabric').get<boolean>('confirmDestructiveActions') ?? true) &&
+		(await vscode.window.showWarningMessage(
+			'Reset the local Service Fabric cluster? All deployed applications will be removed.',
+			{ modal: true },
+			'Reset',
+		)) !== 'Reset'
+	) {
 		return;
-	let n = t ?? (await pickNodeCount('Reset and restart cluster as'));
-	if (!n) return;
-	let o = `
+	}
+	const mode = nodeCount ?? (await pickNodeCount('Reset and restart cluster as'));
+	if (!mode) return;
+	const script = `
 $ErrorActionPreference = 'Stop'
 $sdk = (Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Service Fabric SDK' -ErrorAction SilentlyContinue).FabricSDKInstallPath
 if (-not $sdk) { Write-Error 'Service Fabric SDK is not installed.'; exit 2 }
 $clean = Join-Path $sdk 'ClusterSetup\\CleanCluster.ps1'
 $setup = Join-Path $sdk 'ClusterSetup\\DevClusterSetup.ps1'
 & $clean
-& $setup ${n === '1' ? '-CreateOneNodeCluster' : ''}
+& $setup ${mode === '1' ? '-CreateOneNodeCluster' : ''}
 `;
-	(e.show(), e.info(`Resetting cluster to ${n}-node mode...`), await runPowerShell(e, o, {}));
+	logger.show();
+	logger.info(`Resetting cluster to ${mode}-node mode...`);
+	await runPowerShell(logger, script, {});
 }
 
-async function switchLocalClusterMode(e) {
+/** `serviceFabric.cluster.switchLocalMode`: recreates the cluster in the other mode and saves it as the default. */
+export async function switchLocalClusterMode(logger: Logger): Promise<void> {
 	if (process.platform !== 'win32') {
 		vscode.window.showWarningMessage('Local Service Fabric clusters are supported on Windows only.');
 		return;
 	}
-	let t = await pickNodeCount('Switch local cluster to');
-	!t ||
-		((vscode.workspace.getConfiguration('serviceFabric').get('confirmDestructiveActions') ?? !0) &&
-			(await vscode.window.showWarningMessage(
-				`Recreate local cluster as ${t}-node? All currently deployed applications will be removed.`,
-				{
-					modal: !0,
-				},
-				'Recreate',
-			)) !== 'Recreate') ||
-		(await resetLocalCluster(e, t),
-		await vscode.workspace.getConfiguration('serviceFabric').update('localCluster.nodeCount', t, vscode.ConfigurationTarget.Global));
+	const mode = await pickNodeCount('Switch local cluster to');
+	if (!mode) return;
+	if (
+		(vscode.workspace.getConfiguration('serviceFabric').get<boolean>('confirmDestructiveActions') ?? true) &&
+		(await vscode.window.showWarningMessage(
+			`Recreate local cluster as ${mode}-node? All currently deployed applications will be removed.`,
+			{ modal: true },
+			'Recreate',
+		)) !== 'Recreate'
+	) {
+		return;
+	}
+	await resetLocalCluster(logger, mode);
+	await vscode.workspace.getConfiguration('serviceFabric').update('localCluster.nodeCount', mode, vscode.ConfigurationTarget.Global);
 }
 
-async function openClusterExplorer(e, t) {
-	let r = t ?? e.getActive();
-	if (!r) {
+/** `serviceFabric.cluster.openExplorer`: opens `<endpoint>/Explorer/index.html` for the given (or active) cluster. */
+export async function openClusterExplorer(store: ConnectionStore, connection?: ClusterConnection): Promise<void> {
+	const target = connection ?? store.getActive();
+	if (!target) {
 		vscode.window.showInformationMessage('No active cluster.');
 		return;
 	}
-	let n = `${r.endpoint.replace(/\/$/, '')}/Explorer/index.html`;
-	await vscode.env.openExternal(vscode.Uri.parse(n));
+	const explorerUrl = `${target.endpoint.replace(/\/$/, '')}/Explorer/index.html`;
+	await vscode.env.openExternal(vscode.Uri.parse(explorerUrl));
 }
-
-export {
-	connectLocalCluster,
-	connectRemoteCluster,
-	disconnectCluster,
-	openClusterExplorer,
-	resetLocalCluster,
-	selectActiveCluster,
-	startLocalCluster,
-	stopLocalCluster,
-	switchLocalClusterMode,
-};

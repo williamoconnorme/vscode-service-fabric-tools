@@ -1,49 +1,40 @@
-// @ts-nocheck
 import * as fs from 'fs';
 import * as path from 'path';
 
-async function readTextFile(e) {
-	return fs.promises.readFile(e, 'utf8');
+export async function readTextFile(p: string): Promise<string> {
+	return fs.promises.readFile(p, 'utf8');
 }
 
-async function pathExists(e) {
+export async function pathExists(p: string): Promise<boolean> {
 	try {
-		return (await fs.promises.access(e), !0);
+		await fs.promises.access(p);
+		return true;
 	} catch {
-		return !1;
+		return false;
 	}
 }
 
-async function listDirectories(e) {
+/** Absolute paths of the immediate subdirectories of `p` (empty on error). */
+export async function listDirectories(p: string): Promise<string[]> {
 	try {
-		return (
-			await fs.promises.readdir(e, {
-				withFileTypes: !0,
-			})
-		)
-			.filter((r) => r.isDirectory())
-			.map((r) => path.join(e, r.name));
+		const entries = await fs.promises.readdir(p, { withFileTypes: true });
+		return entries.filter((d) => d.isDirectory()).map((d) => path.join(p, d.name));
 	} catch {
 		return [];
 	}
 }
 
-async function listFiles(e, t) {
+/** Absolute paths of the files directly in `p`, optionally filtered by a case-insensitive extension (empty on error). */
+export async function listFiles(p: string, ext?: string): Promise<string[]> {
 	try {
-		return (
-			await fs.promises.readdir(e, {
-				withFileTypes: !0,
-			})
-		)
-			.filter((n) => n.isFile() && (!t || n.name.toLowerCase().endsWith(t.toLowerCase())))
-			.map((n) => path.join(e, n.name));
+		const entries = await fs.promises.readdir(p, { withFileTypes: true });
+		return entries.filter((d) => d.isFile() && (!ext || d.name.toLowerCase().endsWith(ext.toLowerCase()))).map((d) => path.join(p, d.name));
 	} catch {
 		return [];
 	}
 }
 
-function resolveAgainst(e, t) {
-	return path.isAbsolute(t) ? path.normalize(t) : path.normalize(path.resolve(e, t.replace(/\\/g, path.sep)));
+/** Resolve a possibly-relative path against a base, normalizing separators. */
+export function resolveAgainst(base: string, p: string): string {
+	return path.isAbsolute(p) ? path.normalize(p) : path.normalize(path.resolve(base, p.replace(/\\/g, path.sep)));
 }
-
-export { listDirectories, listFiles, pathExists, readTextFile, resolveAgainst };

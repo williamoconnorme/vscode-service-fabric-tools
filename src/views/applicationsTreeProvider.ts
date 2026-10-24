@@ -1,188 +1,222 @@
-// @ts-nocheck
 import * as vscode from 'vscode';
 import * as path from 'path';
+import type { SfProjectWatcher } from '../project/projectWatcher';
+import type { ApplicationProject, ServiceManifest } from '../project/sfprojModel';
 
-var ApplicationTreeItem = class extends vscode.TreeItem {
-		constructor(r, n, i, o, s, a) {
-			super(n, i);
-			this.kind = r;
-			this.project = o;
-			this.resource = s;
-			this.children = a;
-			switch (((this.contextValue = r), s && (this.resourceUri = s), r)) {
-				case 'sfproj':
-					((this.iconPath = new vscode.ThemeIcon('package')), (this.contextValue = 'sfproj'));
-					break;
-				case 'group':
-					this.iconPath = new vscode.ThemeIcon('folder');
-					break;
-				case 'serviceFolder':
-					this.iconPath = new vscode.ThemeIcon('folder-library');
-					break;
-				case 'packageFolder':
-					this.iconPath = new vscode.ThemeIcon('folder');
-					break;
-				case 'manifest':
-				case 'serviceManifest':
-					((this.iconPath = new vscode.ThemeIcon('file-code')),
-						(this.command = s
-							? {
-									command: 'serviceFabric.openFile',
-									title: 'Open',
-									arguments: [s],
-								}
-							: void 0));
-					break;
-				case 'file':
-					((this.iconPath = vscode.ThemeIcon.File),
-						(this.command = s
-							? {
-									command: 'serviceFabric.openFile',
-									title: 'Open',
-									arguments: [s],
-								}
-							: void 0));
-					break;
-				case 'projectRef':
-					((this.iconPath = new vscode.ThemeIcon('references')),
-						(this.command = s
-							? {
-									command: 'serviceFabric.openFile',
-									title: 'Open',
-									arguments: [s],
-								}
-							: void 0));
-					break;
-				case 'message':
-					this.iconPath = new vscode.ThemeIcon('info');
-					break;
-			}
+export type ApplicationNodeKind =
+	'sfproj' | 'group' | 'serviceFolder' | 'packageFolder' | 'manifest' | 'serviceManifest' | 'file' | 'projectRef' | 'message';
+
+/** A node in the `serviceFabric.applications` view. `contextValue` is the node kind. */
+export class ApplicationTreeItem extends vscode.TreeItem {
+	constructor(
+		readonly kind: ApplicationNodeKind,
+		label: string,
+		collapsibleState: vscode.TreeItemCollapsibleState,
+		readonly project?: ApplicationProject,
+		readonly resource?: vscode.Uri,
+		readonly children?: ApplicationTreeItem[],
+	) {
+		super(label, collapsibleState);
+		this.contextValue = kind;
+		if (resource) this.resourceUri = resource;
+		switch (kind) {
+			case 'sfproj':
+				this.iconPath = new vscode.ThemeIcon('package');
+				this.contextValue = 'sfproj';
+				break;
+			case 'group':
+				this.iconPath = new vscode.ThemeIcon('folder');
+				break;
+			case 'serviceFolder':
+				this.iconPath = new vscode.ThemeIcon('folder-library');
+				break;
+			case 'packageFolder':
+				this.iconPath = new vscode.ThemeIcon('folder');
+				break;
+			case 'manifest':
+			case 'serviceManifest':
+				this.iconPath = new vscode.ThemeIcon('file-code');
+				this.command = resource ? { command: 'serviceFabric.openFile', title: 'Open', arguments: [resource] } : undefined;
+				break;
+			case 'file':
+				this.iconPath = vscode.ThemeIcon.File;
+				this.command = resource ? { command: 'serviceFabric.openFile', title: 'Open', arguments: [resource] } : undefined;
+				break;
+			case 'projectRef':
+				this.iconPath = new vscode.ThemeIcon('references');
+				this.command = resource ? { command: 'serviceFabric.openFile', title: 'Open', arguments: [resource] } : undefined;
+				break;
+			case 'message':
+				this.iconPath = new vscode.ThemeIcon('info');
+				break;
 		}
-	},
-	ApplicationsTreeProvider = class {
-		constructor(t) {
-			this.watcher = t;
-			t.onDidChange(() => this.emitter.fire());
+	}
+}
+
+/** Tree data for the `serviceFabric.applications` view: one root per .sfproj in the workspace. */
+export class ApplicationsTreeProvider implements vscode.TreeDataProvider<ApplicationTreeItem> {
+	private readonly emitter = new vscode.EventEmitter<void>();
+	readonly onDidChangeTreeData: vscode.Event<void> = this.emitter.event;
+
+	constructor(private readonly watcher: SfProjectWatcher) {
+		watcher.onDidChange(() => this.emitter.fire());
+	}
+
+	refresh(): void {
+		this.emitter.fire();
+	}
+
+	getTreeItem(element: ApplicationTreeItem): ApplicationTreeItem {
+		return element;
+	}
+
+	async getChildren(element?: ApplicationTreeItem): Promise<ApplicationTreeItem[]> {
+		if (!element) {
+			const projects = this.watcher.getProjects();
+			return projects.length === 0 ? [] : projects.map((p) => this.makeProjectNode(p));
 		}
-		emitter = new vscode.EventEmitter();
-		onDidChangeTreeData = this.emitter.event;
-		refresh() {
-			this.emitter.fire();
-		}
-		getTreeItem(t) {
-			return t;
-		}
-		async getChildren(t) {
-			if (!t) {
-				let r = this.watcher.getProjects();
-				return r.length === 0 ? [] : r.map((n) => this.makeProjectNode(n));
-			}
-			return t.children ?? [];
-		}
-		makeProjectNode(t) {
-			let r = t.applicationManifest?.applicationTypeName || path.basename(t.sfproj.path, '.sfproj'),
-				n = new ApplicationTreeItem(
-					'sfproj',
-					r,
-					vscode.TreeItemCollapsibleState.Expanded,
-					t,
-					vscode.Uri.file(t.sfproj.path),
-					this.buildProjectChildren(t),
+		return element.children ?? [];
+	}
+
+	private makeProjectNode(project: ApplicationProject): ApplicationTreeItem {
+		const label = project.applicationManifest?.applicationTypeName || path.basename(project.sfproj.path, '.sfproj');
+		const node = new ApplicationTreeItem(
+			'sfproj',
+			label,
+			vscode.TreeItemCollapsibleState.Expanded,
+			project,
+			vscode.Uri.file(project.sfproj.path),
+			this.buildProjectChildren(project),
+		);
+		const version = project.applicationManifest?.applicationTypeVersion;
+		node.description = version ? `v${version}` : undefined;
+		node.tooltip = project.sfproj.path;
+		return node;
+	}
+
+	private buildProjectChildren(project: ApplicationProject): ApplicationTreeItem[] {
+		const children: ApplicationTreeItem[] = [];
+		const apkgRootPath = path.join(project.sfproj.directory, project.sfproj.applicationPackageRootFolder);
+		const apkgRootUri = vscode.Uri.file(apkgRootPath);
+		const apkgChildren: ApplicationTreeItem[] = [];
+		if (project.applicationManifest) {
+			apkgChildren.push(
+				new ApplicationTreeItem(
+					'manifest',
+					'ApplicationManifest.xml',
+					vscode.TreeItemCollapsibleState.None,
+					project,
+					vscode.Uri.file(project.applicationManifest.path),
 				),
-				i = t.applicationManifest?.applicationTypeVersion;
-			return ((n.description = i ? `v${i}` : void 0), (n.tooltip = t.sfproj.path), n);
+			);
+		} else {
+			apkgChildren.push(new ApplicationTreeItem('message', 'ApplicationManifest.xml not found', vscode.TreeItemCollapsibleState.None));
 		}
-		buildProjectChildren(t) {
-			let r = [],
-				n = path.join(t.sfproj.directory, t.sfproj.applicationPackageRootFolder),
-				i = vscode.Uri.file(n),
-				o = [];
-			t.applicationManifest
-				? o.push(
-						new ApplicationTreeItem(
-							'manifest',
-							'ApplicationManifest.xml',
-							vscode.TreeItemCollapsibleState.None,
-							t,
-							vscode.Uri.file(t.applicationManifest.path),
-						),
-					)
-				: o.push(new ApplicationTreeItem('message', 'ApplicationManifest.xml not found', vscode.TreeItemCollapsibleState.None));
-			for (let s of t.serviceManifests) o.push(this.makeServiceFolderNode(t, s));
-			if (
-				(r.push(new ApplicationTreeItem('group', t.sfproj.applicationPackageRootFolder, vscode.TreeItemCollapsibleState.Expanded, t, i, o)),
-				t.applicationParameters.length && r.push(this.makeFileGroup(t, 'ApplicationParameters', t.applicationParameters)),
-				t.publishProfiles.length && r.push(this.makeFileGroup(t, 'PublishProfiles', t.publishProfiles)),
-				t.startupServiceParameters.length && r.push(this.makeFileGroup(t, 'StartupServiceParameters', t.startupServiceParameters)),
-				t.startupServicesManifest &&
-					r.push(
-						new ApplicationTreeItem(
-							'manifest',
-							'StartupServices.xml',
-							vscode.TreeItemCollapsibleState.None,
-							t,
-							vscode.Uri.file(t.startupServicesManifest),
-						),
-					),
-				t.scripts.length && r.push(this.makeFileGroup(t, 'Scripts', t.scripts)),
-				t.sfproj.projectReferences.length)
-			) {
-				let s = t.sfproj.projectReferences.map(
-					(a) => new ApplicationTreeItem('projectRef', path.basename(a), vscode.TreeItemCollapsibleState.None, t, vscode.Uri.file(a)),
-				);
-				r.push(new ApplicationTreeItem('group', 'References', vscode.TreeItemCollapsibleState.Collapsed, t, void 0, s));
-			}
-			return r;
+		for (const sm of project.serviceManifests) apkgChildren.push(this.makeServiceFolderNode(project, sm));
+		children.push(
+			new ApplicationTreeItem(
+				'group',
+				project.sfproj.applicationPackageRootFolder,
+				vscode.TreeItemCollapsibleState.Expanded,
+				project,
+				apkgRootUri,
+				apkgChildren,
+			),
+		);
+		if (project.applicationParameters.length) {
+			children.push(this.makeFileGroup(project, 'ApplicationParameters', project.applicationParameters));
 		}
-		makeServiceFolderNode(t, r) {
-			let n = path.basename(r.packageDirectory),
-				i = vscode.Uri.file(r.packageDirectory),
-				o = [
-					new ApplicationTreeItem(
-						'serviceManifest',
-						'ServiceManifest.xml',
-						vscode.TreeItemCollapsibleState.None,
-						t,
-						vscode.Uri.file(r.path),
-					),
-				];
-			for (let a of r.codePackages)
-				o.push(
-					new ApplicationTreeItem(
-						'packageFolder',
-						`Code (${a})`,
-						vscode.TreeItemCollapsibleState.None,
-						t,
-						vscode.Uri.file(path.join(r.packageDirectory, a)),
-					),
-				);
-			for (let a of r.configPackages)
-				o.push(
-					new ApplicationTreeItem(
-						'packageFolder',
-						`Config (${a})`,
-						vscode.TreeItemCollapsibleState.None,
-						t,
-						vscode.Uri.file(path.join(r.packageDirectory, a)),
-					),
-				);
-			for (let a of r.dataPackages)
-				o.push(
-					new ApplicationTreeItem(
-						'packageFolder',
-						`Data (${a})`,
-						vscode.TreeItemCollapsibleState.None,
-						t,
-						vscode.Uri.file(path.join(r.packageDirectory, a)),
-					),
-				);
-			let s = new ApplicationTreeItem('serviceFolder', n, vscode.TreeItemCollapsibleState.Collapsed, t, i, o);
-			return ((s.description = r.version ? `v${r.version}` : void 0), s);
+		if (project.publishProfiles.length) {
+			children.push(this.makeFileGroup(project, 'PublishProfiles', project.publishProfiles));
 		}
-		makeFileGroup(t, r, n) {
-			let i = n.map((o) => new ApplicationTreeItem('file', path.basename(o), vscode.TreeItemCollapsibleState.None, t, vscode.Uri.file(o)));
-			return new ApplicationTreeItem('group', r, vscode.TreeItemCollapsibleState.Collapsed, t, void 0, i);
+		if (project.startupServiceParameters.length) {
+			children.push(this.makeFileGroup(project, 'StartupServiceParameters', project.startupServiceParameters));
 		}
-	};
+		if (project.startupServicesManifest) {
+			children.push(
+				new ApplicationTreeItem(
+					'manifest',
+					'StartupServices.xml',
+					vscode.TreeItemCollapsibleState.None,
+					project,
+					vscode.Uri.file(project.startupServicesManifest),
+				),
+			);
+		}
+		if (project.scripts.length) {
+			children.push(this.makeFileGroup(project, 'Scripts', project.scripts));
+		}
+		if (project.sfproj.projectReferences.length) {
+			const refs = project.sfproj.projectReferences.map(
+				(ref) =>
+					new ApplicationTreeItem('projectRef', path.basename(ref), vscode.TreeItemCollapsibleState.None, project, vscode.Uri.file(ref)),
+			);
+			children.push(new ApplicationTreeItem('group', 'References', vscode.TreeItemCollapsibleState.Collapsed, project, undefined, refs));
+		}
+		return children;
+	}
 
-export { ApplicationsTreeProvider };
+	private makeServiceFolderNode(project: ApplicationProject, sm: ServiceManifest): ApplicationTreeItem {
+		const folderName = path.basename(sm.packageDirectory);
+		const folderUri = vscode.Uri.file(sm.packageDirectory);
+		const children: ApplicationTreeItem[] = [
+			new ApplicationTreeItem(
+				'serviceManifest',
+				'ServiceManifest.xml',
+				vscode.TreeItemCollapsibleState.None,
+				project,
+				vscode.Uri.file(sm.path),
+			),
+		];
+		for (const pkg of sm.codePackages) {
+			children.push(
+				new ApplicationTreeItem(
+					'packageFolder',
+					`Code (${pkg})`,
+					vscode.TreeItemCollapsibleState.None,
+					project,
+					vscode.Uri.file(path.join(sm.packageDirectory, pkg)),
+				),
+			);
+		}
+		for (const pkg of sm.configPackages) {
+			children.push(
+				new ApplicationTreeItem(
+					'packageFolder',
+					`Config (${pkg})`,
+					vscode.TreeItemCollapsibleState.None,
+					project,
+					vscode.Uri.file(path.join(sm.packageDirectory, pkg)),
+				),
+			);
+		}
+		for (const pkg of sm.dataPackages) {
+			children.push(
+				new ApplicationTreeItem(
+					'packageFolder',
+					`Data (${pkg})`,
+					vscode.TreeItemCollapsibleState.None,
+					project,
+					vscode.Uri.file(path.join(sm.packageDirectory, pkg)),
+				),
+			);
+		}
+		const node = new ApplicationTreeItem(
+			'serviceFolder',
+			folderName,
+			vscode.TreeItemCollapsibleState.Collapsed,
+			project,
+			folderUri,
+			children,
+		);
+		node.description = sm.version ? `v${sm.version}` : undefined;
+		return node;
+	}
+
+	private makeFileGroup(project: ApplicationProject, label: string, files: string[]): ApplicationTreeItem {
+		const children = files.map(
+			(f) => new ApplicationTreeItem('file', path.basename(f), vscode.TreeItemCollapsibleState.None, project, vscode.Uri.file(f)),
+		);
+		return new ApplicationTreeItem('group', label, vscode.TreeItemCollapsibleState.Collapsed, project, undefined, children);
+	}
+}

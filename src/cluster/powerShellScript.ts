@@ -1,29 +1,45 @@
-// @ts-nocheck
+/**
+ * Pure helpers for assembling PowerShell command strings safely. Lives in its
+ * own module (no `vscode` imports) so it can be unit-tested under `tsx`.
+ */
 
-function buildScriptWithParameters(e, t) {
-	let r = [];
-	for (let [n, i] of Object.entries(t))
-		if (i !== void 0) {
-			if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(n)) throw new Error(`Invalid PowerShell parameter name: ${n}`);
-			r.push(`$${n} = ${literal(i)}`);
+/** A value that can be bound to a `$Name` script variable; `undefined` entries are skipped. */
+export type PowerShellParameterValue = string | number | boolean | undefined;
+
+/**
+ * Produce the final PowerShell command by prepending `$Name = <literal>`
+ * declarations to the user's script body. The executable is later invoked via
+ * `powershell -Command <result>`, which does NOT bind trailing `-Name Value`
+ * arguments into variables, so this prepend approach is the correct way to
+ * make values available as `$Name` references inside the script.
+ *
+ *  - Strings → wrapped in single quotes with `'` doubled to `''`. Single
+ *    quoting suppresses `$variable` and backtick interpolation, so the value
+ *    is treated as a literal even if it contains workspace-derived text.
+ *  - Booleans → `$true` / `$false`.
+ *  - Finite numbers → emitted verbatim.
+ *  - `undefined` → skipped (the caller's `if ($Foo) { ... }` blocks are
+ *    expected to handle the missing case).
+ *
+ * Parameter names are validated against `^[A-Za-z_][A-Za-z0-9_]*$` to avoid
+ * accidental injection through a non-identifier key.
+ */
+export function buildScriptWithParameters(script: string, parameters: Record<string, PowerShellParameterValue>): string {
+	const declarations: string[] = [];
+	for (const [k, v] of Object.entries(parameters)) {
+		if (v === undefined) continue;
+		if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) {
+			throw new Error(`Invalid PowerShell parameter name: ${k}`);
 		}
-	return r.length === 0
-		? e
-		: r.join(`
-`) +
-				`
-` +
-				e;
+		declarations.push(`$${k} = ${literal(v)}`);
+	}
+	if (declarations.length === 0) return script;
+	return declarations.join('\n') + '\n' + script;
 }
 
-function literal(e) {
-	return typeof e == 'boolean'
-		? e
-			? '$true'
-			: '$false'
-		: typeof e == 'number' && Number.isFinite(e)
-			? String(e)
-			: `'${(typeof e == 'string' ? e : String(e)).replace(/'/g, "''")}'`;
+function literal(v: string | number | boolean): string {
+	if (typeof v === 'boolean') return v ? '$true' : '$false';
+	if (typeof v === 'number' && Number.isFinite(v)) return String(v);
+	const s = typeof v === 'string' ? v : String(v);
+	return `'${s.replace(/'/g, "''")}'`;
 }
-
-export { buildScriptWithParameters };

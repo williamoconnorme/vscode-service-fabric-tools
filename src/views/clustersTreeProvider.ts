@@ -1,104 +1,127 @@
-// @ts-nocheck
 import * as vscode from 'vscode';
+import type { ClusterConnection, ConnectionStore } from '../cluster/connectionStore';
 
-var ClusterTreeItem = class extends vscode.TreeItem {
-		constructor(r, n, i, o, s) {
-			super(n, i);
-			this.kind = r;
-			this.connection = o;
-			this.children = s;
-			switch (r) {
-				case 'cluster':
-					((this.iconPath = new vscode.ThemeIcon('server')),
-						(this.contextValue = o ? (o.connected ? 'cluster.connected' : 'cluster.disconnected') : 'cluster'));
-					break;
-				case 'group':
-					((this.iconPath = new vscode.ThemeIcon('folder')), (this.contextValue = 'cluster.group'));
-					break;
-				case 'app':
-					((this.iconPath = new vscode.ThemeIcon('package')), (this.contextValue = 'cluster.app'));
-					break;
-				case 'node':
-					((this.iconPath = new vscode.ThemeIcon('vm')), (this.contextValue = 'cluster.node'));
-					break;
-				case 'message':
-					this.iconPath = new vscode.ThemeIcon('info');
-					break;
-			}
+export type ClusterNodeKind = 'cluster' | 'group' | 'app' | 'node' | 'message';
+
+/** A node in the `serviceFabric.clusters` view. */
+export class ClusterTreeItem extends vscode.TreeItem {
+	/** Set on `app` nodes: the deployed application name (without `fabric:/`). */
+	appName: string | undefined;
+
+	constructor(
+		readonly kind: ClusterNodeKind,
+		label: string,
+		collapsibleState: vscode.TreeItemCollapsibleState,
+		readonly connection?: ClusterConnection,
+		readonly children?: ClusterTreeItem[],
+	) {
+		super(label, collapsibleState);
+		switch (kind) {
+			case 'cluster':
+				this.iconPath = new vscode.ThemeIcon('server');
+				this.contextValue = connection ? (connection.connected ? 'cluster.connected' : 'cluster.disconnected') : 'cluster';
+				break;
+			case 'group':
+				this.iconPath = new vscode.ThemeIcon('folder');
+				this.contextValue = 'cluster.group';
+				break;
+			case 'app':
+				this.iconPath = new vscode.ThemeIcon('package');
+				this.contextValue = 'cluster.app';
+				break;
+			case 'node':
+				this.iconPath = new vscode.ThemeIcon('vm');
+				this.contextValue = 'cluster.node';
+				break;
+			case 'message':
+				this.iconPath = new vscode.ThemeIcon('info');
+				break;
 		}
-		appName;
-	},
-	ClustersTreeProvider = class {
-		constructor(t) {
-			this.store = t;
-			t.onDidChange(() => this.emitter.fire());
-		}
-		emitter = new vscode.EventEmitter();
-		onDidChangeTreeData = this.emitter.event;
-		refresh() {
-			this.emitter.fire();
-		}
-		getTreeItem(t) {
-			return t;
-		}
-		async getChildren(t) {
-			if (!t) {
-				let r = this.store.list();
-				return r.length === 0
-					? []
-					: r.map((n) => {
-							let i = new ClusterTreeItem('cluster', n.label, vscode.TreeItemCollapsibleState.Collapsed, n);
-							return ((i.description = describeCluster(n)), (i.tooltip = clusterTooltip(n)), i);
-						});
-			}
-			if (t.kind === 'cluster' && t.connection) {
-				let r = t.connection,
-					n = [],
-					i = (r.nodes ?? []).map((a) => {
-						let c = new ClusterTreeItem('node', a.name, vscode.TreeItemCollapsibleState.None, r);
-						return (
-							(c.description = `${a.status} \u2022 ${a.healthState}`),
-							(c.tooltip = `Type: ${a.nodeType}
-Status: ${a.status}
-Health: ${a.healthState}`),
-							c
-						);
+	}
+}
+
+/** Tree data for the `serviceFabric.clusters` view: saved connections → Nodes / Applications. */
+export class ClustersTreeProvider implements vscode.TreeDataProvider<ClusterTreeItem> {
+	private readonly emitter = new vscode.EventEmitter<void>();
+	readonly onDidChangeTreeData: vscode.Event<void> = this.emitter.event;
+
+	constructor(private readonly store: ConnectionStore) {
+		store.onDidChange(() => this.emitter.fire());
+	}
+
+	refresh(): void {
+		this.emitter.fire();
+	}
+
+	getTreeItem(element: ClusterTreeItem): ClusterTreeItem {
+		return element;
+	}
+
+	async getChildren(element?: ClusterTreeItem): Promise<ClusterTreeItem[]> {
+		if (!element) {
+			const connections = this.store.list();
+			return connections.length === 0
+				? []
+				: connections.map((conn) => {
+						const item = new ClusterTreeItem('cluster', conn.label, vscode.TreeItemCollapsibleState.Collapsed, conn);
+						item.description = describeCluster(conn);
+						item.tooltip = clusterTooltip(conn);
+						return item;
 					});
-				n.push(makeClusterGroupNode(`Nodes (${i.length})`, r, i, 'No nodes reported'));
-				let s = (r.deployedApplications ?? []).map((a) => {
-					let c = new ClusterTreeItem('app', a.name, vscode.TreeItemCollapsibleState.None, r);
-					return ((c.description = `${a.typeName} v${a.typeVersion} \u2022 ${a.status}`), (c.appName = a.name), c);
-				});
-				return (n.push(makeClusterGroupNode(`Applications (${s.length})`, r, s, 'No deployed applications')), n);
-			}
-			return t.children ?? [];
 		}
-	};
-
-function makeClusterGroupNode(e, t, r, n) {
-	let i = r.length === 0 ? [new ClusterTreeItem('message', n, vscode.TreeItemCollapsibleState.None)] : r;
-	return new ClusterTreeItem('group', e, vscode.TreeItemCollapsibleState.Collapsed, t, i);
+		if (element.kind === 'cluster' && element.connection) {
+			const conn = element.connection;
+			const groups: ClusterTreeItem[] = [];
+			const nodeItems = (conn.nodes ?? []).map((n) => {
+				const item = new ClusterTreeItem('node', n.name, vscode.TreeItemCollapsibleState.None, conn);
+				item.description = `${n.status} • ${n.healthState}`;
+				item.tooltip = `Type: ${n.nodeType}
+Status: ${n.status}
+Health: ${n.healthState}`;
+				return item;
+			});
+			groups.push(makeClusterGroupNode(`Nodes (${nodeItems.length})`, conn, nodeItems, 'No nodes reported'));
+			const appItems = (conn.deployedApplications ?? []).map((app) => {
+				const item = new ClusterTreeItem('app', app.name, vscode.TreeItemCollapsibleState.None, conn);
+				item.description = `${app.typeName} v${app.typeVersion} • ${app.status}`;
+				item.appName = app.name;
+				return item;
+			});
+			groups.push(makeClusterGroupNode(`Applications (${appItems.length})`, conn, appItems, 'No deployed applications'));
+			return groups;
+		}
+		return element.children ?? [];
+	}
 }
 
-function describeCluster(e) {
-	if (!e.connected) return `${e.endpoint} (disconnected)`;
-	let t = e.nodes?.length ?? 0,
-		r = e.deployedApplications?.length ?? 0,
-		n = t === 1 ? '1-node' : t === 5 ? '5-node' : `${t}-node`;
-	return `${e.endpoint} \u2022 ${n} \u2022 ${e.aggregatedHealthState ?? 'Unknown'} \u2022 ${r} app${r === 1 ? '' : 's'}`;
+/** A collapsible group node; shows `emptyMessage` as a single info child when `items` is empty. */
+function makeClusterGroupNode(
+	label: string,
+	connection: ClusterConnection,
+	items: ClusterTreeItem[],
+	emptyMessage: string,
+): ClusterTreeItem {
+	const children = items.length === 0 ? [new ClusterTreeItem('message', emptyMessage, vscode.TreeItemCollapsibleState.None)] : items;
+	return new ClusterTreeItem('group', label, vscode.TreeItemCollapsibleState.Collapsed, connection, children);
 }
 
-function clusterTooltip(e) {
-	let t = [`${e.kind} cluster \u2014 ${e.endpoint}`];
-	return (
-		e.connected
-			? (t.push(`Health: ${e.aggregatedHealthState ?? 'Unknown'}`),
-				t.push(`Nodes: ${e.nodes?.length ?? 0}`),
-				t.push(`Applications: ${e.deployedApplications?.length ?? 0}`))
-			: t.push('Disconnected'),
-		t.join(`
-`)
-	);
+function describeCluster(conn: ClusterConnection): string {
+	if (!conn.connected) return `${conn.endpoint} (disconnected)`;
+	const nodeCount = conn.nodes?.length ?? 0;
+	const appCount = conn.deployedApplications?.length ?? 0;
+	const topology = nodeCount === 1 ? '1-node' : nodeCount === 5 ? '5-node' : `${nodeCount}-node`;
+	return `${conn.endpoint} • ${topology} • ${conn.aggregatedHealthState ?? 'Unknown'} • ${appCount} app${appCount === 1 ? '' : 's'}`;
 }
 
-export { ClustersTreeProvider };
+function clusterTooltip(conn: ClusterConnection): string {
+	const lines = [`${conn.kind} cluster — ${conn.endpoint}`];
+	if (conn.connected) {
+		lines.push(`Health: ${conn.aggregatedHealthState ?? 'Unknown'}`);
+		lines.push(`Nodes: ${conn.nodes?.length ?? 0}`);
+		lines.push(`Applications: ${conn.deployedApplications?.length ?? 0}`);
+	} else {
+		lines.push('Disconnected');
+	}
+	return lines.join(`
+`);
+}

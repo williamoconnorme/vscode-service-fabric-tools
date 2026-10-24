@@ -1,121 +1,110 @@
-// @ts-nocheck
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import type { Logger } from '../util/logger';
 import { pickServiceKind } from './addServiceCommand';
 import { isAspNetKind, isCsharpKind } from '../scaffold/addServiceTemplates';
-import { applyCreateApplication } from '../scaffold/createApplicationApply';
+import { applyCreateApplication, type CreateApplicationResult } from '../scaffold/createApplicationApply';
 import { newProjectGuid } from '../scaffold/createApplicationTemplates';
 import { ensureNugetRestored } from '../build/nugetRestore';
 
-async function runCreateApplicationCommand(e) {
-	let t = vscode.workspace.workspaceFolders;
-	if (!t || t.length === 0) {
+interface FrameworkQuickPickItem extends vscode.QuickPickItem {
+	value: string;
+}
+
+/**
+ * `serviceFabric.createApplication`: scaffolds a new Service Fabric application
+ * (plus one seeded service) in a workspace folder.
+ */
+export async function runCreateApplicationCommand(logger: Logger): Promise<void> {
+	const folders = vscode.workspace.workspaceFolders;
+	if (!folders || folders.length === 0) {
 		vscode.window.showErrorMessage('Open a folder before creating a Service Fabric application.');
 		return;
 	}
-	let r =
-		t.length === 1
-			? t[0]
-			: await vscode.window.showWorkspaceFolderPick({
-					placeHolder: 'Select a workspace folder',
-				});
-	if (!r) return;
-	let n = await vscode.window.showInputBox({
+	const folder =
+		folders.length === 1 ? folders[0] : await vscode.window.showWorkspaceFolderPick({ placeHolder: 'Select a workspace folder' });
+	if (!folder) return;
+	const applicationName = await vscode.window.showInputBox({
 		prompt: 'Application type name',
 		value: 'MyApp',
-		validateInput: (d) => (/^[A-Za-z][A-Za-z0-9_.-]*$/.test(d) ? null : 'Use letters, digits, dot, dash or underscore.'),
+		validateInput: (value) => (/^[A-Za-z][A-Za-z0-9_.-]*$/.test(value) ? null : 'Use letters, digits, dot, dash or underscore.'),
 	});
-	if (!n) return;
-	let i = await vscode.window.showInputBox({
+	if (!applicationName) return;
+	const serviceName = await vscode.window.showInputBox({
 		prompt: 'Initial service name',
-		value: `${n}.Service1`,
-		validateInput: (d) => (/^[A-Za-z][A-Za-z0-9_.-]*$/.test(d) ? null : 'Use letters, digits, dot, dash or underscore.'),
+		value: `${applicationName}.Service1`,
+		validateInput: (value) => (/^[A-Za-z][A-Za-z0-9_.-]*$/.test(value) ? null : 'Use letters, digits, dot, dash or underscore.'),
 	});
-	if (!i) return;
-	let o = await pickServiceKind();
-	if (!o) return;
-	let { kind: s, runtime: a } = o,
-		c;
-	if (isCsharpKind(s)) {
-		let d =
-				isAspNetKind(s) || a === 'netcore'
-					? [
-							{
-								label: 'net8.0',
-								description: 'Recommended (LTS)',
-								value: 'net8.0',
-							},
-							{
-								label: 'net6.0',
-								description: 'LTS',
-								value: 'net6.0',
-							},
-						]
-					: [
-							{
-								label: 'net472',
-								description: '.NET Framework 4.7.2 (classic Service Fabric SDK)',
-								value: 'net472',
-							},
-							{
-								label: 'net48',
-								description: '.NET Framework 4.8',
-								value: 'net48',
-							},
-						],
-			f = await vscode.window.showQuickPick(d, {
-				placeHolder: 'Target framework for the seeded service',
-			});
-		if (!f) return;
-		c = f.value;
+	if (!serviceName) return;
+	const choice = await pickServiceKind();
+	if (!choice) return;
+	const { kind, runtime } = choice;
+	let targetFramework: string | undefined;
+	if (isCsharpKind(kind)) {
+		const frameworks: FrameworkQuickPickItem[] =
+			isAspNetKind(kind) || runtime === 'netcore'
+				? [
+						{ label: 'net8.0', description: 'Recommended (LTS)', value: 'net8.0' },
+						{ label: 'net6.0', description: 'LTS', value: 'net6.0' },
+					]
+				: [
+						{ label: 'net472', description: '.NET Framework 4.7.2 (classic Service Fabric SDK)', value: 'net472' },
+						{ label: 'net48', description: '.NET Framework 4.8', value: 'net48' },
+					];
+		const framework = await vscode.window.showQuickPick(frameworks, { placeHolder: 'Target framework for the seeded service' });
+		if (!framework) return;
+		targetFramework = framework.value;
 	}
-	let l = path.join(r.uri.fsPath, n);
-	if (fs.existsSync(l)) {
-		vscode.window.showErrorMessage(`Folder already exists: ${l}`);
+	const targetDirectory = path.join(folder.uri.fsPath, applicationName);
+	if (fs.existsSync(targetDirectory)) {
+		vscode.window.showErrorMessage(`Folder already exists: ${targetDirectory}`);
 		return;
 	}
-	if (isCsharpKind(s)) {
-		let d = path.join(r.uri.fsPath, i);
-		if (fs.existsSync(d)) {
+	if (isCsharpKind(kind)) {
+		const serviceDir = path.join(folder.uri.fsPath, serviceName);
+		if (fs.existsSync(serviceDir)) {
 			vscode.window.showErrorMessage(
-				`Cannot create the application: a folder named '${i}' already exists next to the new application directory (${d}). Choose a different service name or remove the folder first.`,
+				`Cannot create the application: a folder named '${serviceName}' already exists next to the new application directory (${serviceDir}). Choose a different service name or remove the folder first.`,
 			);
 			return;
 		}
 	}
-	let u;
+	let result: CreateApplicationResult;
 	try {
-		u = applyCreateApplication({
-			targetDirectory: l,
-			applicationName: n,
-			serviceName: i,
+		result = applyCreateApplication({
+			targetDirectory,
+			applicationName,
+			serviceName,
 			projectGuid: newProjectGuid(),
-			kind: s,
-			runtime: a,
-			targetFramework: c,
+			kind,
+			runtime,
+			targetFramework,
 		});
-	} catch (d) {
-		let f = d instanceof Error ? d.message : String(d);
-		(e.error(`Create Application failed: ${f}`), vscode.window.showErrorMessage(`Create Application failed: ${f}`));
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		logger.error(`Create Application failed: ${message}`);
+		vscode.window.showErrorMessage(`Create Application failed: ${message}`);
 		return;
 	}
-	if ((e.info(`Scaffolded application at ${l}`), vscode.workspace.getConfiguration('serviceFabric').get('scaffoldAutoRestore', !0)))
+	logger.info(`Scaffolded application at ${targetDirectory}`);
+	if (vscode.workspace.getConfiguration('serviceFabric').get('scaffoldAutoRestore', true)) {
 		try {
-			let d = await ensureNugetRestored(u.sfprojPath, {
-				output: e.outputChannel,
-			});
-			d.ok && d.strategy !== 'skipped'
-				? e.info(`Auto-restore succeeded via ${d.strategy}.`)
-				: d.ok || e.warn(`Auto-restore failed: ${d.message ?? 'no details'}. Run 'Service Fabric: Restore NuGet Packages' to retry.`);
-		} catch (d) {
-			e.warn(`Auto-restore threw: ${d instanceof Error ? d.message : String(d)}`);
+			const restore = await ensureNugetRestored(result.sfprojPath, { output: logger.outputChannel });
+			if (restore.ok && restore.strategy !== 'skipped') {
+				logger.info(`Auto-restore succeeded via ${restore.strategy}.`);
+			} else if (!restore.ok) {
+				logger.warn(`Auto-restore failed: ${restore.message ?? 'no details'}. Run 'Service Fabric: Restore NuGet Packages' to retry.`);
+			}
+		} catch (err) {
+			logger.warn(`Auto-restore threw: ${err instanceof Error ? err.message : String(err)}`);
 		}
-	let p = await vscode.window.showInformationMessage(`Created '${n}'.`, 'Open .sfproj', 'Reveal');
-	if (p === 'Open .sfproj') {
-		let d = await vscode.workspace.openTextDocument(u.sfprojPath);
-		await vscode.window.showTextDocument(d);
-	} else p === 'Reveal' && (await vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(l)));
+	}
+	const picked = await vscode.window.showInformationMessage(`Created '${applicationName}'.`, 'Open .sfproj', 'Reveal');
+	if (picked === 'Open .sfproj') {
+		const doc = await vscode.workspace.openTextDocument(result.sfprojPath);
+		await vscode.window.showTextDocument(doc);
+	} else if (picked === 'Reveal') {
+		await vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(targetDirectory));
+	}
 }
-
-export { runCreateApplicationCommand };

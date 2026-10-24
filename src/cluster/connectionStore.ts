@@ -1,44 +1,72 @@
-// @ts-nocheck
 import * as vscode from 'vscode';
 
-var STORE_KEY = 'serviceFabric.connections',
-	ACTIVE_KEY = 'serviceFabric.activeClusterId',
-	ConnectionStore = class {
-		constructor(t) {
-			this.context = t;
-		}
-		emitter = new vscode.EventEmitter();
-		onDidChange = this.emitter.event;
-		list() {
-			return this.context.workspaceState.get(STORE_KEY, []);
-		}
-		get(t) {
-			return this.list().find((r) => r.id === t);
-		}
-		getActive() {
-			let t = this.context.workspaceState.get(ACTIVE_KEY);
-			return t ? this.get(t) : this.list()[0];
-		}
-		async setActive(t) {
-			(await this.context.workspaceState.update(ACTIVE_KEY, t), this.emitter.fire());
-		}
-		async upsert(t) {
-			let r = this.list(),
-				n = r.findIndex((i) => i.id === t.id);
-			(n >= 0 ? (r[n] = t) : r.push(t),
-				await this.context.workspaceState.update(STORE_KEY, r),
-				this.context.workspaceState.get(ACTIVE_KEY) || (await this.context.workspaceState.update(ACTIVE_KEY, t.id)),
-				this.emitter.fire());
-		}
-		async remove(t) {
-			let r = this.list().filter((i) => i.id !== t);
-			(await this.context.workspaceState.update(STORE_KEY, r),
-				this.context.workspaceState.get(ACTIVE_KEY) === t && (await this.context.workspaceState.update(ACTIVE_KEY, r[0]?.id)),
-				this.emitter.fire());
-		}
-		dispose() {
-			this.emitter.dispose();
-		}
-	};
+import type { ClusterNodeInfo, DeployedApplicationInfo } from './sfRestClient';
 
-export { ConnectionStore };
+export type { ClusterNodeInfo, DeployedApplicationInfo };
+
+export type ClusterKind = 'local' | 'remote';
+
+/** A saved cluster connection plus the last probe results. */
+export interface ClusterConnection {
+	id: string;
+	label: string;
+	endpoint: string;
+	kind: ClusterKind;
+	connected: boolean;
+	aggregatedHealthState?: string;
+	deployedApplications?: DeployedApplicationInfo[];
+	nodes?: ClusterNodeInfo[];
+}
+
+const STORE_KEY = 'serviceFabric.connections';
+const ACTIVE_KEY = 'serviceFabric.activeClusterId';
+
+export class ConnectionStore implements vscode.Disposable {
+	private readonly emitter = new vscode.EventEmitter<void>();
+	readonly onDidChange = this.emitter.event;
+
+	constructor(private readonly context: vscode.ExtensionContext) {}
+
+	list(): ClusterConnection[] {
+		return this.context.workspaceState.get<ClusterConnection[]>(STORE_KEY, []);
+	}
+
+	get(id: string): ClusterConnection | undefined {
+		return this.list().find((c) => c.id === id);
+	}
+
+	getActive(): ClusterConnection | undefined {
+		const id = this.context.workspaceState.get<string>(ACTIVE_KEY);
+		return id ? this.get(id) : this.list()[0];
+	}
+
+	async setActive(id: string): Promise<void> {
+		await this.context.workspaceState.update(ACTIVE_KEY, id);
+		this.emitter.fire();
+	}
+
+	async upsert(conn: ClusterConnection): Promise<void> {
+		const all = this.list();
+		const idx = all.findIndex((c) => c.id === conn.id);
+		if (idx >= 0) all[idx] = conn;
+		else all.push(conn);
+		await this.context.workspaceState.update(STORE_KEY, all);
+		if (!this.context.workspaceState.get(ACTIVE_KEY)) {
+			await this.context.workspaceState.update(ACTIVE_KEY, conn.id);
+		}
+		this.emitter.fire();
+	}
+
+	async remove(id: string): Promise<void> {
+		const all = this.list().filter((c) => c.id !== id);
+		await this.context.workspaceState.update(STORE_KEY, all);
+		if (this.context.workspaceState.get(ACTIVE_KEY) === id) {
+			await this.context.workspaceState.update(ACTIVE_KEY, all[0]?.id);
+		}
+		this.emitter.fire();
+	}
+
+	dispose(): void {
+		this.emitter.dispose();
+	}
+}

@@ -1,116 +1,198 @@
-// @ts-nocheck
+/**
+ * Pure XML helpers for the "Remove Service" command.
+ *
+ * Operates on the raw XML text to preserve the rest of the manifest's
+ * formatting and comments. No `vscode` or `fs` imports — kept testable
+ * under the node runner.
+ */
 
-function patchApplicationManifestForRemove(e, t, r) {
-	let n = e,
-		i = !1,
-		o = [];
-	n = n.replace(/\r?\n?\s*<ServiceManifestImport\b[^>]*>[\s\S]*?<\/ServiceManifestImport>/g, (l) =>
-		new RegExp(`ServiceManifestName="${escapeRegex(t)}"`).test(l) ? ((i = !0), o.push(l), '') : l,
-	);
-	let s = [];
-	n = n.replace(/\r?\n?\s*<Service\b[^>]*>[\s\S]*?<\/Service>/g, (l) =>
-		[...r].some((p) => new RegExp(`ServiceTypeName="${escapeRegex(p)}"`).test(l)) ? (s.push(l), '') : l,
-	);
-	let a = new Set();
-	for (let l of [...s, ...o]) {
-		let u = l.matchAll(/\[([A-Za-z_][A-Za-z0-9_.-]*)\]/g);
-		for (let p of u) a.add(p[1]);
-	}
-	let c = [];
-	for (let l of a) {
-		if (new RegExp(`\\[${escapeRegex(l)}\\]`).test(n)) continue;
-		let p = new RegExp(`\\r?\\n?\\s*<Parameter\\s+Name="${escapeRegex(l)}"[^>]*\\/>`, 'g'),
-			d = n;
-		((n = n.replace(p, '')), n !== d && c.push(l));
-	}
-	return (
-		(n = n.replace(/<Parameters>\s*<\/Parameters>/g, '<Parameters />')),
-		(n = n.replace(/<DefaultServices>\s*<\/DefaultServices>/g, '<DefaultServices />')),
-		{
-			xml: n,
-			removedParameters: c,
-			removedServiceBlocks: s.length,
-			removedImport: i,
+export interface ApplicationManifestRemoveResult {
+	xml: string;
+	/** Names of `<Parameter>` declarations that were dropped because nothing references them any more. */
+	removedParameters: string[];
+	removedServiceBlocks: number;
+	removedImport: boolean;
+}
+
+export interface StartupServicesRemoveResult {
+	xml: string;
+	removedParameters: string[];
+	removedServiceBlocks: number;
+}
+
+export interface SfprojRemoveReferenceResult {
+	xml: string;
+	removed: boolean;
+}
+
+/**
+ * Removes the `<ServiceManifestImport>` and any `<Service>` blocks tied to the
+ * given package, then drops orphaned `<Parameter>` declarations whose names
+ * are no longer referenced anywhere in the manifest.
+ */
+export function patchApplicationManifestForRemove(
+	xml: string,
+	packageName: string,
+	serviceTypeNames: Iterable<string>,
+): ApplicationManifestRemoveResult {
+	let out = xml;
+	// 1. Drop the matching <ServiceManifestImport> block.
+	let removedImport = false;
+	const removedImportBodies: string[] = [];
+	out = out.replace(/\r?\n?\s*<ServiceManifestImport\b[^>]*>[\s\S]*?<\/ServiceManifestImport>/g, (block) => {
+		if (new RegExp(`ServiceManifestName="${escapeRegex(packageName)}"`).test(block)) {
+			removedImport = true;
+			removedImportBodies.push(block);
+			return '';
 		}
-	);
-}
-
-function patchApplicationParametersForRemove(e, t) {
-	if (t.length === 0) return e;
-	let r = e;
-	for (let n of t) {
-		let i = new RegExp(`\\r?\\n?\\s*<Parameter\\s+Name="${escapeRegex(n)}"[^>]*\\/>`, 'g');
-		r = r.replace(i, '');
-	}
-	return ((r = r.replace(/<Parameters>\s*<\/Parameters>/g, '<Parameters />')), r);
-}
-
-function patchStartupServicesXmlForRemove(e, t) {
-	let r = e,
-		n = [];
-	r = r.replace(/\r?\n?\s*<Service\b[^>]*>[\s\S]*?<\/Service>/g, (s) =>
-		[...t].some((c) => new RegExp(`ServiceTypeName="${escapeRegex(c)}"`).test(s)) ? (n.push(s), '') : s,
-	);
-	let i = new Set();
-	for (let s of n) {
-		let a = s.matchAll(/\[([A-Za-z_][A-Za-z0-9_.-]*)\]/g);
-		for (let c of a) i.add(c[1]);
-	}
-	let o = [];
-	for (let s of i) {
-		if (new RegExp(`\\[${escapeRegex(s)}\\]`).test(r)) continue;
-		let c = new RegExp(`\\r?\\n?\\s*<Parameter\\s+Name="${escapeRegex(s)}"[^>]*\\/>`, 'g'),
-			l = r;
-		((r = r.replace(c, '')), r !== l && o.push(s));
-	}
-	return (
-		(r = r.replace(/<Parameters>\s*<\/Parameters>/g, '<Parameters />')),
-		(r = r.replace(/<Services>\s*<\/Services>/g, '<Services />')),
-		{
-			xml: r,
-			removedParameters: o,
-			removedServiceBlocks: n.length,
+		return block;
+	});
+	// 2. Drop matching <Service> blocks, capturing their bodies for parameter analysis.
+	const removedServiceBodies: string[] = [];
+	out = out.replace(/\r?\n?\s*<Service\b[^>]*>[\s\S]*?<\/Service>/g, (block) => {
+		const matched = [...serviceTypeNames].some((t) => new RegExp(`ServiceTypeName="${escapeRegex(t)}"`).test(block));
+		if (matched) {
+			removedServiceBodies.push(block);
+			return '';
 		}
-	);
-}
-
-function extractServiceTypeNames(e) {
-	let t = new Set(),
-		r = /<(?:[A-Za-z]+ServiceType|ServiceType)\s+[^>]*?ServiceTypeName="([^"]+)"/g;
-	for (let n of e.matchAll(r)) t.add(n[1]);
-	return [...t];
-}
-
-function patchSfprojRemoveProjectReference(e, t) {
-	let r = new Set([t, t.replace(/\//g, '\\'), t.replace(/\\/g, '/')]),
-		n = e,
-		i = !1;
-	for (let o of r) {
-		let s = new RegExp(`\\r?\\n?\\s*<ProjectReference\\s+Include="${escapeRegex(o)}"\\s*\\/>`, 'gi'),
-			a = new RegExp(`\\r?\\n?\\s*<ProjectReference\\s+Include="${escapeRegex(o)}"\\s*>[\\s\\S]*?<\\/ProjectReference>`, 'gi'),
-			c = n;
-		((n = n.replace(s, '').replace(a, '')), n !== c && (i = !0));
+		return block;
+	});
+	// 3. Collect parameter references inside removed services AND removed imports
+	//    (ASP.NET kinds reference `[<Folder>_ASPNETCORE_ENVIRONMENT]` only from
+	//    the import's <EnvironmentOverrides>).
+	const referenced = new Set<string>();
+	for (const body of [...removedServiceBodies, ...removedImportBodies]) {
+		const matches = body.matchAll(/\[([A-Za-z_][A-Za-z0-9_.-]*)\]/g);
+		for (const m of matches) referenced.add(m[1]);
 	}
-	return i
-		? ((n = n.replace(/\r?\n?\s*<ItemGroup\b[^>]*>\s*<\/ItemGroup>/g, '')),
-			{
-				xml: n,
-				removed: !0,
-			})
-		: {
-				xml: e,
-				removed: !1,
-			};
+	// 4. Remove parameter declarations that are no longer referenced anywhere else.
+	const removedParameters: string[] = [];
+	for (const name of referenced) {
+		const stillUsed = new RegExp(`\\[${escapeRegex(name)}\\]`).test(out);
+		if (stillUsed) continue;
+		const declPattern = new RegExp(`\\r?\\n?\\s*<Parameter\\s+Name="${escapeRegex(name)}"[^>]*\\/>`, 'g');
+		const before = out;
+		out = out.replace(declPattern, '');
+		if (out !== before) removedParameters.push(name);
+	}
+	// 5. Collapse a now-empty <Parameters></Parameters> to a self-closing tag.
+	out = out.replace(/<Parameters>\s*<\/Parameters>/g, '<Parameters />');
+	out = out.replace(/<DefaultServices>\s*<\/DefaultServices>/g, '<DefaultServices />');
+	return {
+		xml: out,
+		removedParameters,
+		removedServiceBlocks: removedServiceBodies.length,
+		removedImport,
+	};
 }
 
-function escapeRegex(e) {
-	return e.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/**
+ * Drops `<Parameter Name="..." Value="..."/>` lines for the given names from a
+ * per-environment ApplicationParameters file.
+ */
+export function patchApplicationParametersForRemove(xml: string, parameterNames: readonly string[]): string {
+	if (parameterNames.length === 0) return xml;
+	let out = xml;
+	for (const name of parameterNames) {
+		const pattern = new RegExp(`\\r?\\n?\\s*<Parameter\\s+Name="${escapeRegex(name)}"[^>]*\\/>`, 'g');
+		out = out.replace(pattern, '');
+	}
+	out = out.replace(/<Parameters>\s*<\/Parameters>/g, '<Parameters />');
+	return out;
 }
 
-export {
-	extractServiceTypeNames,
-	patchApplicationManifestForRemove,
-	patchApplicationParametersForRemove,
-	patchSfprojRemoveProjectReference,
-	patchStartupServicesXmlForRemove,
-};
+/**
+ * Removes `<Service>` blocks tied to the given service-type names from a
+ * `StartupServices.xml` file, then drops orphaned `<Parameter>` declarations
+ * whose names are no longer referenced anywhere in the file.
+ *
+ * StartupServices.xml has the same `<Service>` block shape as
+ * ApplicationManifest.xml's `<DefaultServices>` (the VS scaffold writes either
+ * one depending on which file is present), so the matching logic mirrors
+ * {@link patchApplicationManifestForRemove} minus the import-removal step
+ * (StartupServices.xml has no `<ServiceManifestImport>` blocks).
+ */
+export function patchStartupServicesXmlForRemove(xml: string, serviceTypeNames: Iterable<string>): StartupServicesRemoveResult {
+	let out = xml;
+	// 1. Drop matching <Service> blocks, capturing their bodies for parameter analysis.
+	const removedServiceBodies: string[] = [];
+	out = out.replace(/\r?\n?\s*<Service\b[^>]*>[\s\S]*?<\/Service>/g, (block) => {
+		const matched = [...serviceTypeNames].some((t) => new RegExp(`ServiceTypeName="${escapeRegex(t)}"`).test(block));
+		if (matched) {
+			removedServiceBodies.push(block);
+			return '';
+		}
+		return block;
+	});
+	// 2. Collect parameter references inside removed services.
+	const referenced = new Set<string>();
+	for (const body of removedServiceBodies) {
+		const matches = body.matchAll(/\[([A-Za-z_][A-Za-z0-9_.-]*)\]/g);
+		for (const m of matches) referenced.add(m[1]);
+	}
+	// 3. Remove parameter declarations no longer referenced anywhere else.
+	const removedParameters: string[] = [];
+	for (const name of referenced) {
+		const stillUsed = new RegExp(`\\[${escapeRegex(name)}\\]`).test(out);
+		if (stillUsed) continue;
+		const declPattern = new RegExp(`\\r?\\n?\\s*<Parameter\\s+Name="${escapeRegex(name)}"[^>]*\\/>`, 'g');
+		const before = out;
+		out = out.replace(declPattern, '');
+		if (out !== before) removedParameters.push(name);
+	}
+	// 4. Collapse now-empty <Parameters></Parameters> and <Services></Services>.
+	out = out.replace(/<Parameters>\s*<\/Parameters>/g, '<Parameters />');
+	out = out.replace(/<Services>\s*<\/Services>/g, '<Services />');
+	return {
+		xml: out,
+		removedParameters,
+		removedServiceBlocks: removedServiceBodies.length,
+	};
+}
+
+/**
+ * Extracts every `ServiceTypeName="..."` declaration from a ServiceManifest.xml body.
+ * Handles all four kinds (Stateless / Stateful / Container / Guest).
+ */
+export function extractServiceTypeNames(serviceManifestXml: string): string[] {
+	const names = new Set<string>();
+	const pattern = /<(?:[A-Za-z]+ServiceType|ServiceType)\s+[^>]*?ServiceTypeName="([^"]+)"/g;
+	for (const m of serviceManifestXml.matchAll(pattern)) names.add(m[1]);
+	return [...names];
+}
+
+/**
+ * Removes a `<ProjectReference Include="..." />` line from a `.sfproj`,
+ * matching slash direction and case insensitively. If the surrounding
+ * `<ItemGroup>` becomes empty (only whitespace), the entire group is removed.
+ *
+ * Returns the patched XML and a flag indicating whether anything changed.
+ */
+export function patchSfprojRemoveProjectReference(xml: string, csprojRelativePath: string): SfprojRemoveReferenceResult {
+	const variants = new Set([csprojRelativePath, csprojRelativePath.replace(/\//g, '\\'), csprojRelativePath.replace(/\\/g, '/')]);
+	let out = xml;
+	let removed = false;
+	for (const variant of variants) {
+		// Self-closing form: <ProjectReference Include="..." />
+		const selfClosing = new RegExp(`\\r?\\n?\\s*<ProjectReference\\s+Include="${escapeRegex(variant)}"\\s*\\/>`, 'gi');
+		// Open/close form (e.g. ASP.NET kinds with a <ServiceLaunchUrl> child):
+		//   <ProjectReference Include="...">
+		//     <ServiceLaunchUrl>...</ServiceLaunchUrl>
+		//   </ProjectReference>
+		const openClose = new RegExp(
+			`\\r?\\n?\\s*<ProjectReference\\s+Include="${escapeRegex(variant)}"\\s*>[\\s\\S]*?<\\/ProjectReference>`,
+			'gi',
+		);
+		const before = out;
+		out = out.replace(selfClosing, '').replace(openClose, '');
+		if (out !== before) removed = true;
+	}
+	if (!removed) return { xml, removed: false };
+	// Collapse any now-empty <ItemGroup>...</ItemGroup>.
+	out = out.replace(/\r?\n?\s*<ItemGroup\b[^>]*>\s*<\/ItemGroup>/g, '');
+	return { xml: out, removed: true };
+}
+
+function escapeRegex(s: string): string {
+	return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}

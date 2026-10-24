@@ -1,34 +1,113 @@
-// @ts-nocheck
+/**
+ * Pure XML/text templates for the "Create Application" command.
+ *
+ * Mirrors the file layout that Visual Studio's "Service Fabric Application"
+ * project template produces, so an application bootstrapped here can be
+ * opened later in VS (or vice-versa) with no friction:
+ *
+ *   <AppName>/
+ *     <AppName>.sfproj
+ *     packages.config
+ *     StartupServices.xml
+ *     ApplicationPackageRoot/
+ *       ApplicationManifest.xml
+ *       <ServiceName>Pkg/
+ *         ServiceManifest.xml
+ *         Code/                      (empty)
+ *         Config/Settings.xml
+ *     ApplicationParameters/{Cloud,Local.1Node,Local.5Node}.xml
+ *     PublishProfiles/{Cloud,Local.1Node,Local.5Node}.xml
+ *     StartupServiceParameters/{Cloud,Local.1Node,Local.5Node}.xml
+ *     Scripts/Deploy-FabricApplication.ps1
+ *
+ * No `vscode` or `fs` imports — everything here is unit-testable.
+ */
 import { isAspNetKind, isStatefulKind } from './addServiceTemplates';
+import type { ServiceKind, ServiceRuntime } from './addServiceTemplates';
 import { DEPLOY_FABRIC_APPLICATION_PS1 } from './deployFabricApplicationScript';
 
-var ENVIRONMENT_NAMES = ['Cloud', 'Local.1Node', 'Local.5Node'];
+/** The three environments Visual Studio seeds for a new application. */
+export const ENVIRONMENT_NAMES = ['Cloud', 'Local.1Node', 'Local.5Node'] as const;
 
-function resolve(e) {
-	let t = e.serviceTypeName ?? `${e.serviceName}Type`,
-		r = e.kind ?? 'stateless',
-		n = e.runtime ?? 'netcore';
+export type EnvironmentName = (typeof ENVIRONMENT_NAMES)[number];
+
+/** Inputs for the Create Application templates. */
+export interface CreateApplicationTemplate {
+	applicationName: string;
+	/** Seeded service name. */
+	serviceName: string;
+	/** GUID without braces; upper-cased into the .sfproj. */
+	projectGuid: string;
+	/** Defaults to `<serviceName>Type`. */
+	serviceTypeName?: string;
+	/** Defaults to `stateless`. */
+	kind?: ServiceKind;
+	/** Defaults to `netcore`. */
+	runtime?: ServiceRuntime;
+	/** Defaults to `1.0.0`. */
+	serviceVersion?: string;
+	/** Defaults to `1.0.0`. */
+	applicationVersion?: string;
+	targetFramework?: string;
+}
+
+/** {@link CreateApplicationTemplate} with every default filled in. */
+interface ResolvedCreateApplicationTemplate extends CreateApplicationTemplate {
+	serviceTypeName: string;
+	serviceVersion: string;
+	applicationVersion: string;
+	instanceCountParameter: string;
+	kind: ServiceKind;
+	runtime: ServiceRuntime;
+}
+
+function resolve(t: CreateApplicationTemplate): ResolvedCreateApplicationTemplate {
+	const serviceTypeName = t.serviceTypeName ?? `${t.serviceName}Type`;
+	const kind = t.kind ?? 'stateless';
+	const runtime = t.runtime ?? 'netcore';
 	return {
-		...e,
-		serviceTypeName: t,
-		serviceVersion: e.serviceVersion ?? '1.0.0',
-		applicationVersion: e.applicationVersion ?? '1.0.0',
-		instanceCountParameter: parameterNameForKind(r, e.serviceName),
-		kind: r,
-		runtime: n,
+		...t,
+		serviceTypeName,
+		serviceVersion: t.serviceVersion ?? '1.0.0',
+		applicationVersion: t.applicationVersion ?? '1.0.0',
+		instanceCountParameter: parameterNameForKind(kind, t.serviceName),
+		kind,
+		runtime,
 	};
 }
 
-function parameterNameForKind(e, t) {
-	return isStatefulKind(e) ? `${t}_TargetReplicaSetSize` : `${t}_InstanceCount`;
+/**
+ * Stateless services use `<ServiceName>_InstanceCount`; stateful and actor
+ * services use `<ServiceName>_TargetReplicaSetSize` (and pair it with a
+ * `_MinReplicaSetSize` parameter). The picked name lines up with the
+ * conventions baked into `addServiceTemplates.defaultParametersFor` so that
+ * later edits via Add Service interleave cleanly.
+ */
+function parameterNameForKind(kind: ServiceKind, serviceName: string): string {
+	return isStatefulKind(kind) ? `${serviceName}_TargetReplicaSetSize` : `${serviceName}_InstanceCount`;
 }
 
-function buildSfprojXml(e) {
+// ---------------------------------------------------------------------------
+// .sfproj
+// ---------------------------------------------------------------------------
+
+/**
+ * Visual Studio-style `.sfproj`. Imports the
+ * `Microsoft.VisualStudio.Azure.Fabric.MSBuild` NuGet package targets and
+ * carries a `<Target Name="ValidateMSBuildFiles">` early-failure block that
+ * mirrors the VS canonical template — building without first running `nuget
+ * restore` produces a clear actionable error rather than an obscure missing-
+ * targets failure.
+ *
+ * Pinned to MSBuild package version 1.7.9 to match the current Application1
+ * VS template.
+ */
+export function buildSfprojXml(t: CreateApplicationTemplate): string {
 	return `<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="14.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="..\\packages\\Microsoft.VisualStudio.Azure.Fabric.MSBuild.1.7.9\\build\\Microsoft.VisualStudio.Azure.Fabric.Application.props" Condition="Exists('..\\packages\\Microsoft.VisualStudio.Azure.Fabric.MSBuild.1.7.9\\build\\Microsoft.VisualStudio.Azure.Fabric.Application.props')" />
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{${e.projectGuid.toUpperCase()}}</ProjectGuid>
+    <ProjectGuid>{${t.projectGuid.toUpperCase()}}</ProjectGuid>
     <ProjectVersion>2.6</ProjectVersion>
     <MinToolsVersion>16.10</MinToolsVersion>
     <SupportedMSBuildNuGetPackageVersion>1.7.9</SupportedMSBuildNuGetPackageVersion>
@@ -82,7 +161,11 @@ function buildSfprojXml(e) {
 `;
 }
 
-function buildPackagesConfigXml() {
+// ---------------------------------------------------------------------------
+// packages.config
+// ---------------------------------------------------------------------------
+
+export function buildPackagesConfigXml(): string {
 	return `<?xml version="1.0" encoding="utf-8"?>
 <packages>
   <package id="Microsoft.VisualStudio.Azure.Fabric.MSBuild" version="1.7.9" targetFramework="net472" />
@@ -90,128 +173,160 @@ function buildPackagesConfigXml() {
 `;
 }
 
-function buildApplicationManifestXml(e) {
-	let t = resolve(e),
-		r = isAspNetKind(t.kind)
-			? `
-    <Parameter Name="${t.serviceName}_ASPNETCORE_ENVIRONMENT" DefaultValue="" />
+// ---------------------------------------------------------------------------
+// ApplicationManifest.xml
+// ---------------------------------------------------------------------------
+
+export function buildApplicationManifestXml(t: CreateApplicationTemplate): string {
+	const r = resolve(t);
+	// Per the VS canonical (Application1) shape, <Parameters> in the
+	// ApplicationManifest carries ONLY ASP.NET env overrides — instance and
+	// replica counts live in StartupServices.xml. Plain stateless/stateful
+	// applications produce an empty `<Parameters>` block.
+	const parametersInner = isAspNetKind(r.kind)
+		? `
+    <Parameter Name="${r.serviceName}_ASPNETCORE_ENVIRONMENT" DefaultValue="" />
   `
-			: '',
-		n;
-	return (
-		t.kind === 'actor'
-			? (n = '')
-			: isAspNetKind(t.kind)
-				? (n = `
+		: '';
+	// Per-kind <ServiceManifestImport> body:
+	//   actor   -> bare <ServiceManifestRef>
+	//   plain   -> <ConfigOverrides />
+	//   ASP.NET -> <ConfigOverrides /> + <EnvironmentOverrides>
+	let importBody: string;
+	if (r.kind === 'actor') {
+		importBody = '';
+	} else if (isAspNetKind(r.kind)) {
+		importBody = `
     <ConfigOverrides />
     <EnvironmentOverrides CodePackageRef="code">
-      <EnvironmentVariable Name="ASPNETCORE_ENVIRONMENT" Value="[${t.serviceName}_ASPNETCORE_ENVIRONMENT]" />
+      <EnvironmentVariable Name="ASPNETCORE_ENVIRONMENT" Value="[${r.serviceName}_ASPNETCORE_ENVIRONMENT]" />
     </EnvironmentOverrides>
-  `)
-				: (n = `
+  `;
+	} else {
+		importBody = `
     <ConfigOverrides />
-  `),
-		`<?xml version="1.0" encoding="utf-8"?>
+  `;
+	}
+	return `<?xml version="1.0" encoding="utf-8"?>
 <ApplicationManifest xmlns:xsd="http://www.w3.org/2001/XMLSchema"
                      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                     ApplicationTypeName="${t.applicationName}Type"
-                     ApplicationTypeVersion="${t.applicationVersion}"
+                     ApplicationTypeName="${r.applicationName}Type"
+                     ApplicationTypeVersion="${r.applicationVersion}"
                      xmlns="http://schemas.microsoft.com/2011/01/fabric">
-  <Parameters>${r}</Parameters>
+  <Parameters>${parametersInner}</Parameters>
   <ServiceManifestImport>
-    <ServiceManifestRef ServiceManifestName="${t.serviceName}Pkg" ServiceManifestVersion="${t.serviceVersion}" />${n}</ServiceManifestImport>
+    <ServiceManifestRef ServiceManifestName="${r.serviceName}Pkg" ServiceManifestVersion="${r.serviceVersion}" />${importBody}</ServiceManifestImport>
 </ApplicationManifest>
-`
-	);
+`;
 }
 
-function buildSeededDefaultServiceBlock(e) {
-	return isStatefulKind(e.kind)
-		? `    <Service Name="${e.serviceName}" ServicePackageActivationMode="ExclusiveProcess">
-      <StatefulService ServiceTypeName="${e.serviceTypeName}" TargetReplicaSetSize="[${e.serviceName}_TargetReplicaSetSize]" MinReplicaSetSize="[${e.serviceName}_MinReplicaSetSize]">
-        <UniformInt64Partition PartitionCount="[${e.serviceName}_PartitionCount]" LowKey="-9223372036854775808" HighKey="9223372036854775807" />
+/**
+ * Renders the `<Service>` block for the seeded service inside `<Services>`
+ * (StartupServices.xml). Indentation is 4 spaces; callers wrap the output in
+ * their own tags.
+ */
+function buildSeededDefaultServiceBlock(r: ResolvedCreateApplicationTemplate): string {
+	if (isStatefulKind(r.kind)) {
+		return `    <Service Name="${r.serviceName}" ServicePackageActivationMode="ExclusiveProcess">
+      <StatefulService ServiceTypeName="${r.serviceTypeName}" TargetReplicaSetSize="[${r.serviceName}_TargetReplicaSetSize]" MinReplicaSetSize="[${r.serviceName}_MinReplicaSetSize]">
+        <UniformInt64Partition PartitionCount="[${r.serviceName}_PartitionCount]" LowKey="-9223372036854775808" HighKey="9223372036854775807" />
       </StatefulService>
-    </Service>`
-		: `    <Service Name="${e.serviceName}" ServicePackageActivationMode="ExclusiveProcess">
-      <StatelessService ServiceTypeName="${e.serviceTypeName}" InstanceCount="[${e.instanceCountParameter}]">
+    </Service>`;
+	}
+	return `    <Service Name="${r.serviceName}" ServicePackageActivationMode="ExclusiveProcess">
+      <StatelessService ServiceTypeName="${r.serviceTypeName}" InstanceCount="[${r.instanceCountParameter}]">
         <SingletonPartition />
       </StatelessService>
     </Service>`;
 }
 
-function buildServiceManifestXml(e) {
-	let t = resolve(e);
-	if (t.kind === 'actor')
+// ---------------------------------------------------------------------------
+// ServiceManifest.xml + Settings.xml
+// ---------------------------------------------------------------------------
+
+export function buildServiceManifestXml(t: CreateApplicationTemplate): string {
+	const r = resolve(t);
+	// Actors emit an empty stub manifest; the real content is generated at
+	// build time by the Service Fabric Actors targets.
+	if (r.kind === 'actor') {
 		return `<?xml version="1.0" encoding="utf-8"?>
-<ServiceManifest Name="${t.serviceName}Pkg"
-                 Version="${t.serviceVersion}"
+<ServiceManifest Name="${r.serviceName}Pkg"
+                 Version="${r.serviceVersion}"
                  xmlns="http://schemas.microsoft.com/2011/01/fabric"
                  xmlns:xsd="http://www.w3.org/2001/XMLSchema"
                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <!-- The content will be generated during build -->
 </ServiceManifest>
 `;
-	let r = isStatefulKind(t.kind)
-			? `    <StatefulServiceType ServiceTypeName="${t.serviceTypeName}" HasPersistedState="true" />`
-			: `    <StatelessServiceType ServiceTypeName="${t.serviceTypeName}" />`,
-		n = isAspNetKind(t.kind)
-			? `
+	}
+	const serviceTypesBlock = isStatefulKind(r.kind)
+		? `    <StatefulServiceType ServiceTypeName="${r.serviceTypeName}" HasPersistedState="true" />`
+		: `    <StatelessServiceType ServiceTypeName="${r.serviceTypeName}" />`;
+	// ASP.NET env block: surface ASPNETCORE_ENVIRONMENT so per-environment
+	// ApplicationParameters can drive it.
+	const aspNetEnvBlock = isAspNetKind(r.kind)
+		? `
     <EnvironmentVariables>
       <EnvironmentVariable Name="ASPNETCORE_ENVIRONMENT" Value=""/>
     </EnvironmentVariables>`
-			: '',
-		i = isAspNetKind(t.kind)
-			? `
+		: '';
+	const workingFolder = isAspNetKind(r.kind)
+		? `
         <WorkingFolder>CodePackage</WorkingFolder>`
-			: '',
-		o;
-	return (
-		t.kind === 'aspNetStateful'
-			? (o = '')
-			: t.kind === 'aspNetStateless'
-				? (o = `
+		: '';
+	// Resources block:
+	//   stateful ASP.NET — no Resources block (Kestrel binds at runtime).
+	//   stateless ASP.NET — http endpoint with explicit Port=8559.
+	//   stateful — ServiceEndpoint + ReplicatorEndpoint.
+	//   stateless — ServiceEndpoint only.
+	let resourcesBlock: string;
+	if (r.kind === 'aspNetStateful') {
+		resourcesBlock = '';
+	} else if (r.kind === 'aspNetStateless') {
+		resourcesBlock = `
   <Resources>
     <Endpoints>
       <Endpoint Protocol="http" Name="ServiceEndpoint" Type="Input" Port="8559" />
     </Endpoints>
-  </Resources>`)
-				: t.kind === 'stateful'
-					? (o = `
+  </Resources>`;
+	} else if (r.kind === 'stateful') {
+		resourcesBlock = `
   <Resources>
     <Endpoints>
       <Endpoint Name="ServiceEndpoint" />
       <Endpoint Name="ReplicatorEndpoint" />
     </Endpoints>
-  </Resources>`)
-					: (o = `
+  </Resources>`;
+	} else {
+		resourcesBlock = `
   <Resources>
     <Endpoints>
       <Endpoint Name="ServiceEndpoint" />
     </Endpoints>
-  </Resources>`),
-		`<?xml version="1.0" encoding="utf-8"?>
-<ServiceManifest Name="${t.serviceName}Pkg"
-                 Version="${t.serviceVersion}"
+  </Resources>`;
+	}
+	return `<?xml version="1.0" encoding="utf-8"?>
+<ServiceManifest Name="${r.serviceName}Pkg"
+                 Version="${r.serviceVersion}"
                  xmlns="http://schemas.microsoft.com/2011/01/fabric"
                  xmlns:xsd="http://www.w3.org/2001/XMLSchema"
                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <ServiceTypes>
-${r}
+${serviceTypesBlock}
   </ServiceTypes>
-  <CodePackage Name="Code" Version="${t.serviceVersion}">
+  <CodePackage Name="Code" Version="${r.serviceVersion}">
     <EntryPoint>
       <ExeHost>
-        <Program>${t.serviceName}.exe</Program>${i}
+        <Program>${r.serviceName}.exe</Program>${workingFolder}
       </ExeHost>
-    </EntryPoint>${n}
+    </EntryPoint>${aspNetEnvBlock}
   </CodePackage>
-  <ConfigPackage Name="Config" Version="${t.serviceVersion}" />${o}
+  <ConfigPackage Name="Config" Version="${r.serviceVersion}" />${resourcesBlock}
 </ServiceManifest>
-`
-	);
+`;
 }
 
-function buildSettingsXml() {
+export function buildSettingsXml(): string {
 	return `<?xml version="1.0" encoding="utf-8"?>
 <Settings xmlns="http://schemas.microsoft.com/2011/01/fabric"
           xmlns:xsd="http://www.w3.org/2001/XMLSchema"
@@ -220,9 +335,13 @@ function buildSettingsXml() {
 `;
 }
 
-function buildPublishProfileXml(e) {
-	return e === 'Cloud'
-		? `<?xml version="1.0" encoding="utf-8"?>
+// ---------------------------------------------------------------------------
+// PublishProfiles/{env}.xml
+// ---------------------------------------------------------------------------
+
+export function buildPublishProfileXml(env: EnvironmentName): string {
+	if (env === 'Cloud') {
+		return `<?xml version="1.0" encoding="utf-8"?>
 <PublishProfile xmlns="http://schemas.microsoft.com/2015/05/fabrictools">
   <!--
     Replace the connection endpoint and certificate fields below with the values
@@ -242,123 +361,159 @@ function buildPublishProfileXml(e) {
     <Parameters UpgradeReplicaSetCheckTimeoutSec="1" Force="true" />
   </UpgradeDeployment>
 </PublishProfile>
-`
-		: `<?xml version="1.0" encoding="utf-8"?>
+`;
+	}
+	return `<?xml version="1.0" encoding="utf-8"?>
 <PublishProfile xmlns="http://schemas.microsoft.com/2015/05/fabrictools">
   <ClusterConnectionParameters />
-  <ApplicationParameterFile Path="..\\ApplicationParameters\\${e}.xml" />
-  <StartupServiceParameterFile Path="..\\StartupServiceParameters\\${e}.xml" />
+  <ApplicationParameterFile Path="..\\ApplicationParameters\\${env}.xml" />
+  <StartupServiceParameterFile Path="..\\StartupServiceParameters\\${env}.xml" />
 </PublishProfile>
 `;
 }
 
-function instanceCountFor(e, t = 'stateless') {
-	return isStatefulKind(t) ? (e === 'Local.1Node' ? '1' : '3') : e === 'Local.1Node' ? '1' : e === 'Local.5Node' ? '3' : '-1';
+// ---------------------------------------------------------------------------
+// ApplicationParameters/{env}.xml
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-environment instance counts that match the VS canonical
+ * (Application1) `StartupServiceParameters/*.xml` values:
+ *  - Local.1Node → 1
+ *  - Local.5Node → 3
+ *  - Cloud       → -1 (stateless: scale-to-node), 3 (stateful)
+ *
+ * For stateful kinds, every environment uses the same fixed value of 3 to
+ * mirror the VS template (which seeds `_TargetReplicaSetSize=3` everywhere
+ * except 1-node clusters, which scale to 1).
+ */
+export function instanceCountFor(env: EnvironmentName, kind: ServiceKind = 'stateless'): string {
+	if (isStatefulKind(kind)) {
+		return env === 'Local.1Node' ? '1' : '3';
+	}
+	if (env === 'Local.1Node') return '1';
+	if (env === 'Local.5Node') return '3';
+	return '-1';
 }
 
-function buildApplicationParametersXml(e, t) {
-	let r = resolve(e),
-		n = isAspNetKind(r.kind)
-			? `    <Parameter Name="${r.serviceName}_ASPNETCORE_ENVIRONMENT" Value="${t === 'Cloud' ? '' : 'Development'}" />`
-			: '',
-		i = n
-			? `
-${n}
+export function buildApplicationParametersXml(t: CreateApplicationTemplate, env: EnvironmentName): string {
+	const r = resolve(t);
+	// Per the VS canonical (Application1) shape, ApplicationParameters/*.xml
+	// carries ONLY ASP.NET env overrides; instance/replica counts live in
+	// StartupServiceParameters/*.xml. Cloud.xml stays empty for ASP.NET so
+	// the operator sets the env per cluster; Local.* defaults to Development.
+	const aspNetLine = isAspNetKind(r.kind)
+		? `    <Parameter Name="${r.serviceName}_ASPNETCORE_ENVIRONMENT" Value="${env === 'Cloud' ? '' : 'Development'}" />`
+		: '';
+	const parametersInner = aspNetLine
+		? `
+${aspNetLine}
   `
-			: '';
+		: '';
 	return `<?xml version="1.0" encoding="utf-8"?>
 <Application Name="fabric:/${r.applicationName}"
              xmlns="http://schemas.microsoft.com/2011/01/fabric"
              xmlns:xsd="http://www.w3.org/2001/XMLSchema"
              xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-  <Parameters>${i}</Parameters>
+  <Parameters>${parametersInner}</Parameters>
 </Application>
 `;
 }
 
-function buildStartupServicesXml(e) {
-	let t = resolve(e);
-	return t.kind === 'actor'
-		? `<?xml version="1.0" encoding="utf-8"?>
+// ---------------------------------------------------------------------------
+// StartupServices.xml + StartupServiceParameters/{env}.xml
+// ---------------------------------------------------------------------------
+
+export function buildStartupServicesXml(t: CreateApplicationTemplate): string {
+	const r = resolve(t);
+	// Actors are registered with ActorRuntime at process start and do not
+	// appear in StartupServices.xml. Emit an empty manifest skeleton so the
+	// file exists for the workspace contract; subsequent Add Service calls
+	// for non-actor kinds populate the body.
+	if (r.kind === 'actor') {
+		return `<?xml version="1.0" encoding="utf-8"?>
 <StartupServicesManifest xmlns:xsd="http://www.w3.org/2001/XMLSchema"
                          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
                          xmlns="http://schemas.microsoft.com/2011/01/fabric">
   <Parameters />
   <Services />
 </StartupServicesManifest>
-`
-		: `<?xml version="1.0" encoding="utf-8"?>
+`;
+	}
+	return `<?xml version="1.0" encoding="utf-8"?>
 <StartupServicesManifest xmlns:xsd="http://www.w3.org/2001/XMLSchema"
                          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
                          xmlns="http://schemas.microsoft.com/2011/01/fabric">
   <Parameters>
 ${
-	isStatefulKind(t.kind)
-		? `    <Parameter Name="${t.serviceName}_TargetReplicaSetSize" DefaultValue="3" />
-    <Parameter Name="${t.serviceName}_MinReplicaSetSize" DefaultValue="3" />
-    <Parameter Name="${t.serviceName}_PartitionCount" DefaultValue="1" />`
-		: `    <Parameter Name="${t.instanceCountParameter}" DefaultValue="-1" />`
+	isStatefulKind(r.kind)
+		? `    <Parameter Name="${r.serviceName}_TargetReplicaSetSize" DefaultValue="3" />
+    <Parameter Name="${r.serviceName}_MinReplicaSetSize" DefaultValue="3" />
+    <Parameter Name="${r.serviceName}_PartitionCount" DefaultValue="1" />`
+		: `    <Parameter Name="${r.instanceCountParameter}" DefaultValue="-1" />`
 }
   </Parameters>
   <Services>
-${buildSeededDefaultServiceBlock(t)}
+${buildSeededDefaultServiceBlock(r)}
   </Services>
 </StartupServicesManifest>
 `;
 }
 
-function buildStartupServiceParametersXml(e, t) {
-	let r = resolve(e);
-	return r.kind === 'actor'
-		? `<?xml version="1.0" encoding="utf-8"?>
+export function buildStartupServiceParametersXml(t: CreateApplicationTemplate, env: EnvironmentName): string {
+	const r = resolve(t);
+	// Actors don't carry instance/replica params.
+	if (r.kind === 'actor') {
+		return `<?xml version="1.0" encoding="utf-8"?>
 <StartupServices xmlns="http://schemas.microsoft.com/2011/01/fabric"
                  xmlns:xsd="http://www.w3.org/2001/XMLSchema"
                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <Parameters />
 </StartupServices>
-`
-		: `<?xml version="1.0" encoding="utf-8"?>
+`;
+	}
+	return `<?xml version="1.0" encoding="utf-8"?>
 <StartupServices xmlns="http://schemas.microsoft.com/2011/01/fabric"
                  xmlns:xsd="http://www.w3.org/2001/XMLSchema"
                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <Parameters>
 ${
 	isStatefulKind(r.kind)
-		? `    <Parameter Name="${r.serviceName}_TargetReplicaSetSize" Value="${instanceCountFor(t, r.kind)}" />
-    <Parameter Name="${r.serviceName}_MinReplicaSetSize" Value="${instanceCountFor(t, r.kind)}" />
+		? `    <Parameter Name="${r.serviceName}_TargetReplicaSetSize" Value="${instanceCountFor(env, r.kind)}" />
+    <Parameter Name="${r.serviceName}_MinReplicaSetSize" Value="${instanceCountFor(env, r.kind)}" />
     <Parameter Name="${r.serviceName}_PartitionCount" Value="1" />`
-		: `    <Parameter Name="${r.instanceCountParameter}" Value="${instanceCountFor(t, r.kind)}" />`
+		: `    <Parameter Name="${r.instanceCountParameter}" Value="${instanceCountFor(env, r.kind)}" />`
 }
   </Parameters>
 </StartupServices>
 `;
 }
 
-function buildDeployFabricApplicationScript() {
+// ---------------------------------------------------------------------------
+// Scripts/Deploy-FabricApplication.ps1
+// ---------------------------------------------------------------------------
+
+export function buildDeployFabricApplicationScript(): string {
 	return DEPLOY_FABRIC_APPLICATION_PS1;
 }
 
-function newProjectGuid() {
-	let e = globalThis.crypto;
-	if (e && typeof e.randomUUID == 'function') return e.randomUUID().toUpperCase();
-	let t = new Uint8Array(16);
-	for (let n = 0; n < t.length; n++) t[n] = Math.floor(Math.random() * 256);
-	((t[6] = (t[6] & 15) | 64), (t[8] = (t[8] & 63) | 128));
-	let r = Array.from(t, (n) => n.toString(16).padStart(2, '0')).join('');
-	return (r.slice(0, 8) + '-' + r.slice(8, 12) + '-' + r.slice(12, 16) + '-' + r.slice(16, 20) + '-' + r.slice(20)).toUpperCase();
-}
+// ---------------------------------------------------------------------------
+// GUID generator
+// ---------------------------------------------------------------------------
 
-export {
-	ENVIRONMENT_NAMES,
-	buildApplicationManifestXml,
-	buildApplicationParametersXml,
-	buildDeployFabricApplicationScript,
-	buildPackagesConfigXml,
-	buildPublishProfileXml,
-	buildServiceManifestXml,
-	buildSettingsXml,
-	buildSfprojXml,
-	buildStartupServiceParametersXml,
-	buildStartupServicesXml,
-	newProjectGuid,
-};
+/**
+ * Generates a v4 GUID using `crypto.randomUUID` when available, falling back
+ * to `Math.random` only when running under a host that lacks WebCrypto. The
+ * return value is upper-case and *does not* include surrounding braces.
+ */
+export function newProjectGuid(): string {
+	// `lib` is ES2022 only, so `crypto` isn't declared on globalThis; probe it structurally.
+	const cryptoAny = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+	if (cryptoAny && typeof cryptoAny.randomUUID === 'function') return cryptoAny.randomUUID().toUpperCase();
+	const bytes = new Uint8Array(16);
+	for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+	bytes[6] = (bytes[6] & 15) | 64;
+	bytes[8] = (bytes[8] & 63) | 128;
+	const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+	return (hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16) + '-' + hex.slice(16, 20) + '-' + hex.slice(20)).toUpperCase();
+}

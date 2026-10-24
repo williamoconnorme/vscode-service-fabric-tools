@@ -1,90 +1,122 @@
-// @ts-nocheck
 import * as vscode from 'vscode';
+import type { ConnectionStore } from '../cluster/connectionStore';
 import { SfRestClient } from '../cluster/sfRestClient';
+import type { Logger } from '../util/logger';
 
-var DiagnosticEventsPanel = class {
-	constructor(t, r) {
-		this.store = t;
-		this.logger = r;
-	}
-	panel;
-	timer;
-	show(t) {
+/** One EventStore record as returned by `/EventsStore/Cluster/Events` (parsed JSON, rendered by the webview as-is). */
+export type DiagnosticEvent = Record<string, unknown>;
+
+/** The state message posted to the webview. */
+interface DiagnosticEventsState {
+	connected: boolean;
+	endpoint?: string;
+	label?: string;
+	events: DiagnosticEvent[];
+	message?: string;
+}
+
+/** Messages the webview sends back to the extension. */
+interface PanelMessage {
+	type?: string;
+}
+
+const POLL_INTERVAL_MS = 15e3;
+const LOOKBACK_MS = 60 * 60 * 1e3;
+const REQUEST_TIMEOUT_MS = 6e3;
+const MAX_EVENTS = 200;
+
+/**
+ * Webview for `serviceFabric.diagnostics.showEvents`: polls the active cluster's
+ * EventStore for the last hour of cluster events, newest first.
+ */
+export class DiagnosticEventsPanel implements vscode.Disposable {
+	private panel: vscode.WebviewPanel | undefined;
+	private timer: ReturnType<typeof setInterval> | undefined;
+
+	constructor(
+		private readonly store: ConnectionStore,
+		private readonly logger: Logger,
+	) {}
+
+	show(extensionUri: vscode.Uri): void {
 		if (this.panel) {
 			this.panel.reveal(vscode.ViewColumn.Active);
 			return;
 		}
-		let r = vscode.window.createWebviewPanel(
+		const panel = vscode.window.createWebviewPanel(
 			'serviceFabric.diagnosticEvents',
 			'Service Fabric: Diagnostic Events',
 			vscode.ViewColumn.Active,
 			{
-				enableScripts: !0,
-				retainContextWhenHidden: !0,
-				localResourceRoots: [t],
+				enableScripts: true,
+				retainContextWhenHidden: true,
+				localResourceRoots: [extensionUri],
 			},
 		);
-		((this.panel = r),
-			(r.webview.html = getDiagnosticEventsHtml()),
-			r.onDidDispose(() => {
-				((this.panel = void 0), this.timer && (clearInterval(this.timer), (this.timer = void 0)));
-			}),
-			r.webview.onDidReceiveMessage((n) => {
-				n?.type === 'refresh' && this.poll();
-			}),
-			this.poll(),
-			(this.timer = setInterval(() => this.poll(), 15e3)));
+		this.panel = panel;
+		panel.webview.html = getDiagnosticEventsHtml();
+		panel.onDidDispose(() => {
+			this.panel = undefined;
+			if (this.timer) {
+				clearInterval(this.timer);
+				this.timer = undefined;
+			}
+		});
+		panel.webview.onDidReceiveMessage((msg: PanelMessage | undefined) => {
+			if (msg?.type === 'refresh') this.poll();
+		});
+		this.poll();
+		this.timer = setInterval(() => this.poll(), POLL_INTERVAL_MS);
 	}
-	async poll() {
+
+	/**
+	 * Posts state to the webview. Callers have checked `this.panel` before their
+	 * `await`; if the panel is disposed mid-poll this throws, as upstream does.
+	 */
+	private postState(state: DiagnosticEventsState): void {
+		this.panel!.webview.postMessage({ type: 'state', state });
+	}
+
+	async poll(): Promise<void> {
 		if (!this.panel) return;
-		let t = this.store.getActive();
-		if (!t?.connected) {
-			this.panel.webview.postMessage({
-				type: 'state',
-				state: {
-					connected: !1,
-					events: [],
-					message: 'No active cluster connection.',
-				},
-			});
+		const active = this.store.getActive();
+		if (!active?.connected) {
+			this.postState({ connected: false, events: [], message: 'No active cluster connection.' });
 			return;
 		}
-		let r = new SfRestClient(t.endpoint),
-			n = new Date(Date.now() - 60 * 60 * 1e3).toISOString(),
-			i = new Date().toISOString();
+		const client = new SfRestClient(active.endpoint);
+		const start = new Date(Date.now() - LOOKBACK_MS).toISOString();
+		const end = new Date().toISOString();
 		try {
-			let o = `/EventsStore/Cluster/Events?StartTimeUtc=${encodeURIComponent(n)}&EndTimeUtc=${encodeURIComponent(i)}`,
-				s = await r.rawGet(o, 6e3),
-				a = Array.isArray(s) ? s.slice().reverse() : [];
-			this.panel.webview.postMessage({
-				type: 'state',
-				state: {
-					connected: !0,
-					endpoint: t.endpoint,
-					label: t.label,
-					events: a.slice(0, 200),
-				},
+			const pathAndQuery = `/EventsStore/Cluster/Events?StartTimeUtc=${encodeURIComponent(start)}&EndTimeUtc=${encodeURIComponent(end)}`;
+			const body: unknown = await client.rawGet(pathAndQuery, REQUEST_TIMEOUT_MS);
+			const events: DiagnosticEvent[] = Array.isArray(body) ? body.slice().reverse() : [];
+			this.postState({
+				connected: true,
+				endpoint: active.endpoint,
+				label: active.label,
+				events: events.slice(0, MAX_EVENTS),
 			});
-		} catch (o) {
-			(this.logger.warn(`Diagnostic events poll failed: ${o.message}`),
-				this.panel.webview.postMessage({
-					type: 'state',
-					state: {
-						connected: !0,
-						endpoint: t.endpoint,
-						label: t.label,
-						events: [],
-						message: `Failed to fetch /EventsStore. Most local dev clusters do not enable EventStore \u2014 this view is best used with clusters that have EventStore configured. (${o.message})`,
-					},
-				}));
+		} catch (err) {
+			const message = (err as Error).message;
+			this.logger.warn(`Diagnostic events poll failed: ${message}`);
+			this.postState({
+				connected: true,
+				endpoint: active.endpoint,
+				label: active.label,
+				events: [],
+				message: `Failed to fetch /EventsStore. Most local dev clusters do not enable EventStore — this view is best used with clusters that have EventStore configured. (${message})`,
+			});
 		}
 	}
-	dispose() {
-		(this.timer && clearInterval(this.timer), this.panel?.dispose());
-	}
-};
 
-function getDiagnosticEventsHtml() {
+	dispose(): void {
+		if (this.timer) clearInterval(this.timer);
+		this.panel?.dispose();
+	}
+}
+
+function getDiagnosticEventsHtml(): string {
 	return `<!doctype html>
 <html lang="en">
 <head>
@@ -155,5 +187,3 @@ function escapeHtml(s) {
 </body>
 </html>`;
 }
-
-export { DiagnosticEventsPanel };

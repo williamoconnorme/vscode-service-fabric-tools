@@ -1,6 +1,18 @@
-// @ts-nocheck
-
-var DEPLOY_FABRIC_APPLICATION_PS1 = `<#
+/**
+ * Verbatim copy of the Visual Studio Service Fabric "Deploy-FabricApplication.ps1"
+ * template, kept in its own module so the multi-hundred-line script literal
+ * doesn't pollute the main templates file.
+ *
+ * The contract here is intentionally identical to the script Visual Studio
+ * emits — Service Fabric Tools invokes it with the same parameter names, and
+ * the deploy flow inside this extension calls into it via splatting (see
+ * `src/deploy/deployScript.ts`).  Editing the parameters or the high-level
+ * structure will break compatibility with both Visual Studio *and* this
+ * extension's own deploy command, so callers that need to customise the
+ * script should add user-editable hooks on top of it rather than mutating
+ * the literal below.
+ */
+export const DEPLOY_FABRIC_APPLICATION_PS1 = `<#
 .SYNOPSIS
 Deploys a Service Fabric application type to a cluster.
 
@@ -297,5 +309,3 @@ else
     Publish-NewServiceFabricApplication @PublishParameters
 }
 `;
-
-export { DEPLOY_FABRIC_APPLICATION_PS1 };

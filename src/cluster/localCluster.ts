@@ -1,61 +1,73 @@
-// @ts-nocheck
 import * as vscode from 'vscode';
+import type { ClusterConnection, ConnectionStore } from './connectionStore';
 import { SfRestClient } from './sfRestClient';
 
-var LOCAL_CLUSTER_ID = 'local',
-	LocalClusterManager = class {
-		constructor(t, r) {
-			this.store = t;
-			this.logger = r;
-		}
-		async connect() {
-			let t = vscode.workspace.getConfiguration('serviceFabric').get('localCluster.endpoint') ?? 'http://localhost:19080',
-				r = {
-					id: LOCAL_CLUSTER_ID,
-					label: 'Local Cluster',
-					endpoint: t,
-					kind: 'local',
-					connected: !1,
-				};
-			(await this.store.upsert(r), await this.store.setActive(r.id));
-			let n = await this.refresh(r);
-			return (
-				n?.connected
-					? vscode.window.showInformationMessage(`Connected to local Service Fabric cluster at ${t}.`)
-					: vscode.window.showWarningMessage(`Could not reach local cluster at ${t}. Make sure the dev cluster is running.`),
-				n
-			);
-		}
-		async refresh(t) {
-			let r = new SfRestClient(t.endpoint);
-			try {
-				let n = await r.getClusterHealth(5e3),
-					i = await r.getDeployedApplications(5e3).catch(() => []),
-					o = await r.getNodes(5e3).catch(() => []),
-					s = {
-						...t,
-						connected: !0,
-						aggregatedHealthState: n.aggregatedHealthState,
-						deployedApplications: i,
-						nodes: o,
-					};
-				return (
-					this.logger.info(`Cluster ${t.endpoint} health=${n.aggregatedHealthState} nodes=${o.length} apps=${i.length}`),
-					await this.store.upsert(s),
-					s
-				);
-			} catch (n) {
-				this.logger.warn(`Cluster probe failed: ${n.message}`);
-				let i = {
-					...t,
-					connected: !1,
-					deployedApplications: [],
-					nodes: [],
-					aggregatedHealthState: void 0,
-				};
-				return (await this.store.upsert(i), i);
-			}
-		}
-	};
+/** Minimal logger surface used here (structurally matches util/logger's Logger). */
+interface LocalClusterLogger {
+	info(message: string): void;
+	warn(message: string): void;
+}
 
-export { LocalClusterManager };
+const LOCAL_CLUSTER_ID = 'local';
+
+/**
+ * Manages the connection entry for the local dev cluster: registers it in the
+ * {@link ConnectionStore} and refreshes its health, nodes and applications.
+ */
+export class LocalClusterManager {
+	constructor(
+		private readonly store: ConnectionStore,
+		private readonly logger: LocalClusterLogger,
+	) {}
+
+	async connect(): Promise<ClusterConnection> {
+		const endpoint = vscode.workspace.getConfiguration('serviceFabric').get<string>('localCluster.endpoint') ?? 'http://localhost:19080';
+		const conn: ClusterConnection = {
+			id: LOCAL_CLUSTER_ID,
+			label: 'Local Cluster',
+			endpoint,
+			kind: 'local',
+			connected: false,
+		};
+		await this.store.upsert(conn);
+		await this.store.setActive(conn.id);
+		const refreshed = await this.refresh(conn);
+		if (refreshed?.connected) {
+			vscode.window.showInformationMessage(`Connected to local Service Fabric cluster at ${endpoint}.`);
+		} else {
+			vscode.window.showWarningMessage(`Could not reach local cluster at ${endpoint}. Make sure the dev cluster is running.`);
+		}
+		return refreshed;
+	}
+
+	/** Probes the cluster, stores the updated connection and returns it. Never throws for probe failures. */
+	async refresh(conn: ClusterConnection): Promise<ClusterConnection> {
+		const client = new SfRestClient(conn.endpoint);
+		try {
+			const health = await client.getClusterHealth(5000);
+			const apps = await client.getDeployedApplications(5000).catch(() => []);
+			const nodes = await client.getNodes(5000).catch(() => []);
+			const updated: ClusterConnection = {
+				...conn,
+				connected: true,
+				aggregatedHealthState: health.aggregatedHealthState,
+				deployedApplications: apps,
+				nodes,
+			};
+			this.logger.info(`Cluster ${conn.endpoint} health=${health.aggregatedHealthState} nodes=${nodes.length} apps=${apps.length}`);
+			await this.store.upsert(updated);
+			return updated;
+		} catch (err) {
+			this.logger.warn(`Cluster probe failed: ${(err as Error).message}`);
+			const disconnected: ClusterConnection = {
+				...conn,
+				connected: false,
+				deployedApplications: [],
+				nodes: [],
+				aggregatedHealthState: undefined,
+			};
+			await this.store.upsert(disconnected);
+			return disconnected;
+		}
+	}
+}

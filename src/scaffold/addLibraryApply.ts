@@ -1,4 +1,3 @@
-// @ts-nocheck
 import * as fs from 'fs';
 import * as path from 'path';
 import {
@@ -8,86 +7,140 @@ import {
 	patchCsprojAddProjectReference,
 } from './addLibraryTemplates';
 
-async function applyAddLibrary(e) {
-	if (!e.name || !/^[A-Za-z][A-Za-z0-9_.-]*$/.test(e.name)) throw new Error(`Invalid library name: '${e.name}'.`);
-	if (!e.workspaceRoot || !fs.existsSync(e.workspaceRoot)) throw new Error(`Workspace root does not exist: '${e.workspaceRoot}'.`);
-	let t = path.join(e.workspaceRoot, e.name),
-		r = path.join(t, `${e.name}.csproj`),
-		n = path.join(t, 'Class1.cs');
-	if (fs.existsSync(t)) {
-		if (fs.readdirSync(t).length > 0 && !e.allowExistingEmptyFolder)
-			throw new Error(`Cannot create library: folder already exists and is non-empty: ${t}`);
-	} else
-		fs.mkdirSync(t, {
-			recursive: !0,
-		});
-	let i = !1;
+export interface AddLibraryOptions {
+	/** Folder the new `<name>/` library directory is created in. */
+	workspaceRoot: string;
+	name: string;
+	targetFramework: string;
+	/** Absolute paths of consumer csprojs that should reference the new library. */
+	consumers: string[];
+	/** Allow scaffolding into an existing non-empty folder. */
+	allowExistingEmptyFolder?: boolean;
+}
+
+export interface AddLibraryResult {
+	libraryDirectory: string;
+	libraryCsprojPath: string;
+	classStubPath: string;
+	patchedConsumers: string[];
+}
+
+export interface AddLibraryReferenceOnlyOptions {
+	consumerCsproj: string;
+	targetCsproj: string;
+}
+
+export interface AddLibraryReferenceOnlyResult {
+	changed: boolean;
+	relativePath: string;
+}
+
+/**
+ * Pure (no `vscode` import) on-disk apply step for `serviceFabric.addLibrary`.
+ * Per Plan §6.3:
+ *   1. Create `<workspaceRoot>/<name>/<name>.csproj` (minimal SDK shape).
+ *   2. Create `<name>/Class1.cs`.
+ *   3. For each consumer csproj, append a `<ProjectReference>` row to it.
+ *      Idempotent — already-referenced consumers are left untouched.
+ *   4. NEVER touch `<App>.sfproj`, ApplicationManifest.xml, StartupServices.xml,
+ *      or any `*Parameters/*.xml` file. Libraries are not part of the SF
+ *      manifest model.
+ *
+ * Rollback semantics: if any step throws, the library directory is removed
+ * (best-effort) so a re-run starts from a clean slate. Already-patched
+ * consumer csprojs remain patched — adding the same reference twice is a
+ * no-op via `patchCsprojAddProjectReference`'s idempotency.
+ */
+export async function applyAddLibrary(opts: AddLibraryOptions): Promise<AddLibraryResult> {
+	if (!opts.name || !/^[A-Za-z][A-Za-z0-9_.-]*$/.test(opts.name)) throw new Error(`Invalid library name: '${opts.name}'.`);
+	if (!opts.workspaceRoot || !fs.existsSync(opts.workspaceRoot)) throw new Error(`Workspace root does not exist: '${opts.workspaceRoot}'.`);
+	const libraryDirectory = path.join(opts.workspaceRoot, opts.name);
+	const libraryCsprojPath = path.join(libraryDirectory, `${opts.name}.csproj`);
+	const classStubPath = path.join(libraryDirectory, 'Class1.cs');
+	if (fs.existsSync(libraryDirectory)) {
+		if (fs.readdirSync(libraryDirectory).length > 0 && !opts.allowExistingEmptyFolder)
+			throw new Error(`Cannot create library: folder already exists and is non-empty: ${libraryDirectory}`);
+	} else {
+		fs.mkdirSync(libraryDirectory, { recursive: true });
+	}
+	let scaffoldedFiles = false;
 	try {
-		(fs.writeFileSync(
-			r,
-			buildLibraryCsproj({
-				name: e.name,
-				targetFramework: e.targetFramework,
-			}),
-			'utf8',
-		),
-			fs.writeFileSync(n, buildLibraryClassStub(e.name), 'utf8'),
-			(i = !0));
-		let o = [];
-		for (let s of e.consumers) {
-			if (!fs.existsSync(s)) throw new Error(`Consumer csproj does not exist: ${s}`);
-			let a = fs.readFileSync(s, 'utf8');
-			isServiceFabricServiceProject(a);
-			let c = path.dirname(s),
-				l = toMsbuildRelativePath(c, r),
-				u = patchCsprojAddProjectReference(a, l);
-			u.changed && (fs.writeFileSync(s, u.xml, 'utf8'), o.push(s));
+		fs.writeFileSync(libraryCsprojPath, buildLibraryCsproj({ name: opts.name, targetFramework: opts.targetFramework }), 'utf8');
+		fs.writeFileSync(classStubPath, buildLibraryClassStub(opts.name), 'utf8');
+		scaffoldedFiles = true;
+		const patched: string[] = [];
+		for (const consumer of opts.consumers) {
+			if (!fs.existsSync(consumer)) throw new Error(`Consumer csproj does not exist: ${consumer}`);
+			const xml = fs.readFileSync(consumer, 'utf8');
+			if (isServiceFabricServiceProject(xml)) {
+				// Service csproj — fine, this is the typical case (a service consuming a library).
+			}
+			const consumerDir = path.dirname(consumer);
+			const rel = toMsbuildRelativePath(consumerDir, libraryCsprojPath);
+			const result = patchCsprojAddProjectReference(xml, rel);
+			if (result.changed) {
+				fs.writeFileSync(consumer, result.xml, 'utf8');
+				patched.push(consumer);
+			}
 		}
-		return {
-			libraryDirectory: t,
-			libraryCsprojPath: r,
-			classStubPath: n,
-			patchedConsumers: o,
-		};
-	} catch (o) {
-		if (i) {
+		return { libraryDirectory, libraryCsprojPath, classStubPath, patchedConsumers: patched };
+	} catch (err) {
+		// Best-effort rollback of just the scaffolded files; consumer patches
+		// are kept (they're idempotent on retry).
+		if (scaffoldedFiles) {
 			try {
-				fs.unlinkSync(r);
-			} catch {}
+				fs.unlinkSync(libraryCsprojPath);
+			} catch {
+				/* best-effort */
+			}
 			try {
-				fs.unlinkSync(n);
-			} catch {}
+				fs.unlinkSync(classStubPath);
+			} catch {
+				/* best-effort */
+			}
 		}
 		try {
-			fs.existsSync(t) && fs.readdirSync(t).length === 0 && fs.rmdirSync(t);
-		} catch {}
-		throw o;
+			if (fs.existsSync(libraryDirectory) && fs.readdirSync(libraryDirectory).length === 0) {
+				fs.rmdirSync(libraryDirectory);
+			}
+		} catch {
+			/* best-effort */
+		}
+		throw err;
 	}
 }
 
-async function applyAddLibraryReferenceOnly(e) {
-	if (!fs.existsSync(e.consumerCsproj)) throw new Error(`Consumer csproj does not exist: ${e.consumerCsproj}`);
-	if (!fs.existsSync(e.targetCsproj)) throw new Error(`Target csproj does not exist: ${e.targetCsproj}`);
-	let t = fs.readFileSync(e.targetCsproj, 'utf8');
-	if (isServiceFabricServiceProject(t))
+/**
+ * "Reference existing library" path (Plan §6.2.b — `.csproj`-context invocation).
+ * Adds a single `<ProjectReference>` row in the right-clicked csproj that points
+ * at an already-existing library csproj. Does not create any new files.
+ *
+ * Returns `{ changed: true }` when the consumer was patched, or
+ * `{ changed: false }` when the reference already existed (idempotent).
+ */
+export async function applyAddLibraryReferenceOnly(opts: AddLibraryReferenceOnlyOptions): Promise<AddLibraryReferenceOnlyResult> {
+	if (!fs.existsSync(opts.consumerCsproj)) throw new Error(`Consumer csproj does not exist: ${opts.consumerCsproj}`);
+	if (!fs.existsSync(opts.targetCsproj)) throw new Error(`Target csproj does not exist: ${opts.targetCsproj}`);
+	const targetXml = fs.readFileSync(opts.targetCsproj, 'utf8');
+	if (isServiceFabricServiceProject(targetXml))
 		throw new Error(
-			`Refusing to add a reference to '${path.basename(e.targetCsproj)}': it is a Service Fabric service project. Use 'Service Fabric: Add Service\u2026' for service-to-service references.`,
+			`Refusing to add a reference to '${path.basename(opts.targetCsproj)}': it is a Service Fabric service project. Use 'Service Fabric: Add Service…' for service-to-service references.`,
 		);
-	let r = path.dirname(e.consumerCsproj),
-		n = toMsbuildRelativePath(r, e.targetCsproj),
-		i = fs.readFileSync(e.consumerCsproj, 'utf8'),
-		o = patchCsprojAddProjectReference(i, n);
-	return (
-		o.changed && fs.writeFileSync(e.consumerCsproj, o.xml, 'utf8'),
-		{
-			changed: o.changed,
-			relativePath: n,
-		}
-	);
+	const consumerDir = path.dirname(opts.consumerCsproj);
+	const rel = toMsbuildRelativePath(consumerDir, opts.targetCsproj);
+	const consumerXml = fs.readFileSync(opts.consumerCsproj, 'utf8');
+	const result = patchCsprojAddProjectReference(consumerXml, rel);
+	if (result.changed) {
+		fs.writeFileSync(opts.consumerCsproj, result.xml, 'utf8');
+	}
+	return { changed: result.changed, relativePath: rel };
 }
 
-function toMsbuildRelativePath(e, t) {
-	return path.relative(e, t).split('/').join('\\');
+/**
+ * Computes a relative path between two absolute filesystem paths and converts
+ * forward-slashes to back-slashes so it can be embedded directly in MSBuild
+ * `Include="..."` attributes.
+ */
+function toMsbuildRelativePath(fromDir: string, toPath: string): string {
+	return path.relative(fromDir, toPath).split('/').join('\\');
 }
-
-export { applyAddLibrary, applyAddLibraryReferenceOnly };

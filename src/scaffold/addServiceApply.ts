@@ -1,4 +1,3 @@
-// @ts-nocheck
 import * as fs from 'fs';
 import * as path from 'path';
 import {
@@ -25,191 +24,314 @@ import {
 	patchStartupServicesXml,
 	resolveCsharpSettings,
 } from './addServiceTemplates';
+import type { AddServiceTemplate, CsharpSettings } from './addServiceTemplates';
+import type { ApplicationProject } from '../project/sfprojModel';
 
-async function applyAddService(e, t, r) {
-	if (!e.applicationManifest) throw new Error('Application manifest is missing.');
-	let n = collectExistingServiceNames(e);
-	if (n.has(t.serviceName.toLowerCase())) throw new Error(`A service named '${t.serviceName}' already exists in this application.`);
-	if (n.has(`${t.serviceName.toLowerCase()}pkg`)) throw new Error(`A service package '${t.serviceName}Pkg' already exists.`);
-	if (t.kind === 'guest' && !r?.guestSourcePath) throw new Error('Guest executable scaffold requires options.guestSourcePath.');
-	let i = path.dirname(e.sfproj.path),
-		o = path.join(i, e.sfproj.applicationPackageRootFolder),
-		s = path.dirname(i),
-		a = isCsharpKind(t.kind),
-		c = a ? resolveCsharpSettings(t) : void 0,
-		l = a && c ? path.join(s, c.csprojDirName) : void 0,
-		u = a && l ? path.join(l, 'PackageRoot') : path.join(o, `${t.serviceName}Pkg`);
-	if (a && l && fs.existsSync(l)) throw new Error(`Cannot scaffold C# project: directory already exists: ${l}`);
-	if (!a && fs.existsSync(u)) throw new Error(`Service folder already exists on disk: ${u}`);
-	let p = t;
-	if (t.kind === 'guest' && r?.guestSourcePath) {
-		let j = r.guestSourcePath,
-			se = fs.statSync(j).isDirectory() ? (t.exeProgram ?? `${t.serviceName}.exe`) : path.basename(j);
-		p = {
-			...t,
-			exeProgram: se,
-		};
+export interface AddServiceOptions {
+	/** Guest kinds only: the executable file or payload folder to stage into `Code/`. */
+	guestSourcePath?: string;
+}
+
+export interface AddServiceResult {
+	serviceManifestPath: string;
+	applicationManifestPath: string;
+	patchedParameterFiles: string[];
+	patchedStartupParameterFiles: string[];
+	startupServicesManifestPath: string | undefined;
+	csprojPath: string | undefined;
+	launchSettingsPath: string | undefined;
+	appsettingsDevelopmentPath: string | undefined;
+	guestExePath: string | undefined;
+}
+
+interface CsharpScaffoldResult {
+	csprojPath: string;
+	launchSettingsPath: string;
+	appsettingsDevelopmentPath: string | undefined;
+}
+
+/**
+ * Pure (no `vscode` import) on-disk apply step for the Add Service command.
+ * Throws on conflict so the caller can surface a friendly error.
+ *
+ * For C# kinds, also generates a sibling `<ServiceName>.csproj` (with
+ * `Program.cs` and `<ServiceName>.cs`) and registers it as a
+ * `<ProjectReference>` in the `.sfproj` so the resulting project mirrors the
+ * Visual Studio "Add → New Service Fabric Service…" experience.
+ *
+ * For `kind === 'guest'`, copies the user-provided source binary into
+ * `Code/` (or copies the source directory contents when the path is a folder).
+ */
+export async function applyAddService(
+	project: ApplicationProject,
+	template: AddServiceTemplate,
+	options?: AddServiceOptions,
+): Promise<AddServiceResult> {
+	if (!project.applicationManifest) throw new Error('Application manifest is missing.');
+	const existing = collectExistingServiceNames(project);
+	if (existing.has(template.serviceName.toLowerCase()))
+		throw new Error(`A service named '${template.serviceName}' already exists in this application.`);
+	if (existing.has(`${template.serviceName.toLowerCase()}pkg`))
+		throw new Error(`A service package '${template.serviceName}Pkg' already exists.`);
+	if (template.kind === 'guest' && !options?.guestSourcePath)
+		throw new Error('Guest executable scaffold requires options.guestSourcePath.');
+	const projectDir = path.dirname(project.sfproj.path);
+	const apkgDir = path.join(projectDir, project.sfproj.applicationPackageRootFolder);
+	const repoDir = path.dirname(projectDir);
+	// Layout decision: C# kinds host PackageRoot inside their csproj folder
+	// (sibling-project layout, matching the VS canonical Application1 shape);
+	// guest kinds continue to live under <App>/ApplicationPackageRoot/<Service>Pkg/.
+	const csharp = isCsharpKind(template.kind);
+	const settings = csharp ? resolveCsharpSettings(template) : undefined;
+	const csprojDir = csharp && settings ? path.join(repoDir, settings.csprojDirName) : undefined;
+	const svcDir = csharp && csprojDir ? path.join(csprojDir, 'PackageRoot') : path.join(apkgDir, `${template.serviceName}Pkg`);
+	if (csharp && csprojDir && fs.existsSync(csprojDir))
+		throw new Error(`Cannot scaffold C# project: directory already exists: ${csprojDir}`);
+	if (!csharp && fs.existsSync(svcDir)) throw new Error(`Service folder already exists on disk: ${svcDir}`);
+	// For guest kinds, derive the program name from the source binary so the
+	// manifest's <Program> element matches the file we actually copied in.
+	let effectiveTemplate = template;
+	if (template.kind === 'guest' && options?.guestSourcePath) {
+		const src = options.guestSourcePath;
+		const programName = fs.statSync(src).isDirectory() ? (template.exeProgram ?? `${template.serviceName}.exe`) : path.basename(src);
+		effectiveTemplate = { ...template, exeProgram: programName };
 	}
-	(fs.mkdirSync(path.join(u, 'Config'), {
-		recursive: !0,
-	}),
-		a ||
-			fs.mkdirSync(path.join(u, 'Code'), {
-				recursive: !0,
-			}));
-	let d = path.join(u, 'ServiceManifest.xml');
-	(fs.writeFileSync(d, buildServiceManifestXml(p), 'utf8'),
-		fs.writeFileSync(path.join(u, 'Config', 'Settings.xml'), buildSettingsXml(), 'utf8'));
-	let f;
-	p.kind === 'guest' && r?.guestSourcePath && (f = stageGuestExecutable(r.guestSourcePath, path.join(u, 'Code')));
-	let m = e.applicationManifest.path,
-		v = fs.readFileSync(m, 'utf8'),
-		h = !!e.startupServicesManifest,
-		P = h ? patchApplicationManifestImports(v, p) : patchApplicationManifest(v, p);
-	fs.writeFileSync(m, P, 'utf8');
-	let g;
-	if (h && e.startupServicesManifest) {
-		g = e.startupServicesManifest;
-		let j = fs.readFileSync(g, 'utf8'),
-			le = patchStartupServicesXml(j, p);
-		le !== j && fs.writeFileSync(g, le, 'utf8');
+	// Create the package-root directory tree. C# kinds (physical layout) only
+	// need <csprojDir>/PackageRoot/Config/; guest kinds also need a Code/ to
+	// receive the staged executable.
+	fs.mkdirSync(path.join(svcDir, 'Config'), { recursive: true });
+	if (!csharp) {
+		fs.mkdirSync(path.join(svcDir, 'Code'), { recursive: true });
 	}
-	let w = [];
-	for (let j of e.applicationParameters)
+	const serviceManifestPath = path.join(svcDir, 'ServiceManifest.xml');
+	fs.writeFileSync(serviceManifestPath, buildServiceManifestXml(effectiveTemplate), 'utf8');
+	fs.writeFileSync(path.join(svcDir, 'Config', 'Settings.xml'), buildSettingsXml(), 'utf8');
+	let guestExePath: string | undefined;
+	if (effectiveTemplate.kind === 'guest' && options?.guestSourcePath) {
+		guestExePath = stageGuestExecutable(options.guestSourcePath, path.join(svcDir, 'Code'));
+	}
+	// Wire the new service into ApplicationManifest.xml. Two routing paths:
+	//   - StartupServices.xml-first (modern VS template): only patch the
+	//     <Parameters> + <ServiceManifestImport> halves of the application
+	//     manifest; the runtime <Service> placement lives in StartupServices.xml.
+	//   - Legacy <DefaultServices>-only: patch every section, mirroring the
+	//     original behaviour for projects without StartupServices.xml.
+	const appManifestPath = project.applicationManifest.path;
+	const original = fs.readFileSync(appManifestPath, 'utf8');
+	const useStartupServices = !!project.startupServicesManifest;
+	const patchedAppManifest: string = useStartupServices
+		? patchApplicationManifestImports(original, effectiveTemplate)
+		: patchApplicationManifest(original, effectiveTemplate);
+	fs.writeFileSync(appManifestPath, patchedAppManifest, 'utf8');
+	let startupServicesManifestPath: string | undefined;
+	if (useStartupServices && project.startupServicesManifest) {
+		startupServicesManifestPath = project.startupServicesManifest;
+		const before = fs.readFileSync(startupServicesManifestPath, 'utf8');
+		const after: string = patchStartupServicesXml(before, effectiveTemplate);
+		if (after !== before) {
+			fs.writeFileSync(startupServicesManifestPath, after, 'utf8');
+		}
+	}
+	const patchedParamFiles: string[] = [];
+	for (const paramFile of project.applicationParameters) {
 		try {
-			let le = classifyEnvironment(path.basename(j)),
-				se = fs.readFileSync(j, 'utf8'),
-				Z = patchApplicationParametersXml(se, p, le);
-			Z !== se && (fs.writeFileSync(j, Z, 'utf8'), w.push(j));
-		} catch {}
-	let b = [];
-	if (h)
-		for (let j of e.startupServiceParameters)
+			const flavor = classifyEnvironment(path.basename(paramFile));
+			const before = fs.readFileSync(paramFile, 'utf8');
+			const after: string = patchApplicationParametersXml(before, effectiveTemplate, flavor);
+			if (after !== before) {
+				fs.writeFileSync(paramFile, after, 'utf8');
+				patchedParamFiles.push(paramFile);
+			}
+		} catch {
+			// best-effort
+		}
+	}
+	const patchedStartupParamFiles: string[] = [];
+	if (useStartupServices) {
+		for (const paramFile of project.startupServiceParameters) {
 			try {
-				let le = classifyEnvironment(path.basename(j)),
-					se = fs.readFileSync(j, 'utf8'),
-					Z = patchStartupServiceParametersXml(se, p, le);
-				Z !== se && (fs.writeFileSync(j, Z, 'utf8'), b.push(j));
-			} catch {}
-	let S, z, O;
-	if (a && l && c) {
-		let j = scaffoldCsharpProject(e, p, l, c);
-		((S = j.csprojPath), (z = j.launchSettingsPath), (O = j.appsettingsDevelopmentPath));
+				const flavor = classifyEnvironment(path.basename(paramFile));
+				const before = fs.readFileSync(paramFile, 'utf8');
+				const after: string = patchStartupServiceParametersXml(before, effectiveTemplate, flavor);
+				if (after !== before) {
+					fs.writeFileSync(paramFile, after, 'utf8');
+					patchedStartupParamFiles.push(paramFile);
+				}
+			} catch {
+				// best-effort
+			}
+		}
+	}
+	let csprojPath: string | undefined;
+	let launchSettingsPath: string | undefined;
+	let appsettingsDevelopmentPath: string | undefined;
+	if (csharp && csprojDir && settings) {
+		const cs = scaffoldCsharpProject(project, effectiveTemplate, csprojDir, settings);
+		csprojPath = cs.csprojPath;
+		launchSettingsPath = cs.launchSettingsPath;
+		appsettingsDevelopmentPath = cs.appsettingsDevelopmentPath;
 	}
 	return {
-		serviceManifestPath: d,
-		applicationManifestPath: m,
-		patchedParameterFiles: w,
-		patchedStartupParameterFiles: b,
-		startupServicesManifestPath: g,
-		csprojPath: S,
-		launchSettingsPath: z,
-		appsettingsDevelopmentPath: O,
-		guestExePath: f,
+		serviceManifestPath,
+		applicationManifestPath: appManifestPath,
+		patchedParameterFiles: patchedParamFiles,
+		patchedStartupParameterFiles: patchedStartupParamFiles,
+		startupServicesManifestPath,
+		csprojPath,
+		launchSettingsPath,
+		appsettingsDevelopmentPath,
+		guestExePath,
 	};
 }
 
-function collectExistingServiceNames(e) {
-	let t = new Set();
-	for (let r of e.serviceManifests) (t.add(r.name.toLowerCase()), t.add(r.name.replace(/Pkg$/i, '').toLowerCase()));
-	for (let r of e.applicationManifest?.serviceManifestRefs ?? [])
-		(t.add(r.name.toLowerCase()), t.add(r.name.replace(/Pkg$/i, '').toLowerCase()));
-	return t;
+/**
+ * Lower-cased names of every service package already in the application, both
+ * with and without the `Pkg` suffix, so callers can reject collisions.
+ */
+export function collectExistingServiceNames(project: ApplicationProject): Set<string> {
+	const names = new Set<string>();
+	for (const sm of project.serviceManifests) {
+		names.add(sm.name.toLowerCase());
+		names.add(sm.name.replace(/Pkg$/i, '').toLowerCase());
+	}
+	for (const ref of project.applicationManifest?.serviceManifestRefs ?? []) {
+		names.add(ref.name.toLowerCase());
+		names.add(ref.name.replace(/Pkg$/i, '').toLowerCase());
+	}
+	return names;
 }
 
-function scaffoldCsharpProject(e, t, r, n) {
-	let i = e.sfproj.path,
-		o = path.dirname(i),
-		s = path.dirname(o);
-	fs.mkdirSync(r, {
-		recursive: !0,
-	});
-	let a = path.join(r, `${n.csprojDirName}.csproj`);
-	if (
-		(fs.writeFileSync(a, buildCsharpCsproj(t, void 0, n), 'utf8'),
-		fs.writeFileSync(path.join(r, 'Program.cs'), buildCsharpProgramCs(t, n), 'utf8'),
-		t.kind === 'actor')
-	) {
-		let h = `${r}.Interfaces`;
-		(fs.mkdirSync(h, {
-			recursive: !0,
-		}),
-			fs.writeFileSync(path.join(h, `${n.csprojDirName}.Interfaces.csproj`), buildActorInterfacesCsproj(t, n), 'utf8'),
-			fs.writeFileSync(path.join(h, `${n.actorInterfaceName}.cs`), buildActorInterfaceCs(t, n), 'utf8'),
-			fs.writeFileSync(path.join(r, `${n.actorTypeName}.cs`), buildActorCs(t, n), 'utf8'));
-	} else fs.writeFileSync(path.join(r, `${n.className}.cs`), buildCsharpServiceCs(t, n), 'utf8');
-	let c;
-	if (isAspNetKind(t.kind)) {
-		let h = path.join(r, 'Controllers');
-		(fs.mkdirSync(h, {
-			recursive: !0,
-		}),
-			fs.writeFileSync(path.join(h, 'ValuesController.cs'), buildAspNetValuesControllerCs(t, n), 'utf8'),
-			fs.writeFileSync(path.join(r, 'appsettings.json'), buildAspNetAppsettingsJson(), 'utf8'),
-			(c = path.join(r, 'appsettings.Development.json')),
-			fs.writeFileSync(c, buildAspNetAppsettingsDevelopmentJson(), 'utf8'));
+// ---------------------------------------------------------------------------
+// internals
+// ---------------------------------------------------------------------------
+
+/**
+ * Generates the companion C# project (Program.cs, <Service>.cs, .csproj) in a
+ * sibling folder of the .sfproj's directory and registers it as a
+ * `<ProjectReference>` in the .sfproj. The csproj folder must already exist
+ * (the caller — `applyAddService` — also writes the `PackageRoot/` shape
+ * inside it before calling this).
+ *
+ * For actor kinds, additionally writes a sibling `<Folder>.Interfaces/`
+ * project (`I<Actor>.cs` + `<Folder>.Interfaces.csproj`) and the host
+ * project's actor implementation file.
+ *
+ * For ASP.NET kinds, additionally writes `Controllers/ValuesController.cs`,
+ * `appsettings.json`, and `appsettings.Development.json`.
+ *
+ * Every C# kind also gets `Properties/launchSettings.json` so
+ * `dotnet run` / Visual Studio F5 know how to launch the service.
+ */
+function scaffoldCsharpProject(
+	project: ApplicationProject,
+	template: AddServiceTemplate,
+	csprojDir: string,
+	settings: CsharpSettings,
+): CsharpScaffoldResult {
+	const sfprojPath = project.sfproj.path;
+	const sfprojDir = path.dirname(sfprojPath);
+	// Computed but unused, kept for parity with upstream (a future iteration
+	// may need it for sibling-project lookups).
+	const repoDir = path.dirname(sfprojDir);
+	void repoDir;
+	// Make sure the csproj folder exists. applyAddService already created
+	// <csprojDir>/PackageRoot/Config so this is normally a no-op; defensively
+	// re-create in case a different caller wires us up.
+	fs.mkdirSync(csprojDir, { recursive: true });
+	const csprojPath = path.join(csprojDir, `${settings.csprojDirName}.csproj`);
+	fs.writeFileSync(csprojPath, buildCsharpCsproj(template, undefined, settings), 'utf8');
+	fs.writeFileSync(path.join(csprojDir, 'Program.cs'), buildCsharpProgramCs(template, settings), 'utf8');
+	if (template.kind === 'actor') {
+		// Sibling-project layout: actor host lives at <csprojDir>; the public
+		// interface contract lives in a separate <Folder>.Interfaces project
+		// next to it, matching the VS canonical Application1 shape.
+		const interfacesDir = `${csprojDir}.Interfaces`;
+		fs.mkdirSync(interfacesDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(interfacesDir, `${settings.csprojDirName}.Interfaces.csproj`),
+			buildActorInterfacesCsproj(template, settings),
+			'utf8',
+		);
+		fs.writeFileSync(path.join(interfacesDir, `${settings.actorInterfaceName}.cs`), buildActorInterfaceCs(template, settings), 'utf8');
+		fs.writeFileSync(path.join(csprojDir, `${settings.actorTypeName}.cs`), buildActorCs(template, settings), 'utf8');
+	} else {
+		fs.writeFileSync(path.join(csprojDir, `${settings.className}.cs`), buildCsharpServiceCs(template, settings), 'utf8');
 	}
-	let l = path.join(r, 'Properties');
-	fs.mkdirSync(l, {
-		recursive: !0,
-	});
-	let u = path.join(l, 'launchSettings.json'),
-		p = t.endpointPort ?? (isAspNetKind(t.kind) ? 8559 : void 0),
-		d = isAspNetKind(t.kind) && t.httpsEndpoint ? (t.httpsEndpoint.port ?? 8443) : void 0;
+	let appsettingsDevelopmentPath: string | undefined;
+	if (isAspNetKind(template.kind)) {
+		const controllersDir = path.join(csprojDir, 'Controllers');
+		fs.mkdirSync(controllersDir, { recursive: true });
+		fs.writeFileSync(path.join(controllersDir, 'ValuesController.cs'), buildAspNetValuesControllerCs(template, settings), 'utf8');
+		fs.writeFileSync(path.join(csprojDir, 'appsettings.json'), buildAspNetAppsettingsJson(), 'utf8');
+		appsettingsDevelopmentPath = path.join(csprojDir, 'appsettings.Development.json');
+		fs.writeFileSync(appsettingsDevelopmentPath, buildAspNetAppsettingsDevelopmentJson(), 'utf8');
+	}
+	// Properties/launchSettings.json — enables F5 / dotnet run for every C# kind.
+	const propertiesDir = path.join(csprojDir, 'Properties');
+	fs.mkdirSync(propertiesDir, { recursive: true });
+	const launchSettingsPath = path.join(propertiesDir, 'launchSettings.json');
+	const launchPort = template.endpointPort ?? (isAspNetKind(template.kind) ? 8559 : undefined);
+	// ASP.NET kinds with HTTPS opt-in get a dual-scheme applicationUrl.
+	const httpsPort = isAspNetKind(template.kind) && template.httpsEndpoint ? (template.httpsEndpoint.port ?? 8443) : undefined;
 	fs.writeFileSync(
-		u,
-		p !== void 0
-			? buildLaunchSettingsJson(t, {
-					http: p,
-					https: d,
-				})
-			: buildLaunchSettingsJson(t),
+		launchSettingsPath,
+		launchPort !== undefined
+			? buildLaunchSettingsJson(template, { http: launchPort, https: httpsPort })
+			: buildLaunchSettingsJson(template),
 		'utf8',
 	);
-	let f = toMsbuildRelativePath(o, a),
-		m = fs.readFileSync(i, 'utf8'),
-		v = patchSfprojForProjectReference(m, f, {
-			kind: t.kind,
-		});
-	return (
-		v !== m && fs.writeFileSync(i, v, 'utf8'),
-		{
-			csprojPath: a,
-			launchSettingsPath: u,
-			appsettingsDevelopmentPath: c,
-		}
-	);
+	// Register the new csproj in the .sfproj. ASP.NET kinds get a
+	// <ServiceLaunchUrl> child for VS-canonical parity.
+	const sfprojRelToCsproj = toMsbuildRelativePath(sfprojDir, csprojPath);
+	const sfprojXml = fs.readFileSync(sfprojPath, 'utf8');
+	const patched: string = patchSfprojForProjectReference(sfprojXml, sfprojRelToCsproj, { kind: template.kind });
+	if (patched !== sfprojXml) {
+		fs.writeFileSync(sfprojPath, patched, 'utf8');
+	}
+	return { csprojPath, launchSettingsPath, appsettingsDevelopmentPath };
 }
 
-function toMsbuildRelativePath(e, t) {
-	return path.relative(e, t).replace(/\//g, '\\');
+/**
+ * Computes a Windows-style relative path (using backslashes) from `fromDir` to
+ * `toPath`, suitable for embedding directly in a `.csproj` / `.sfproj`.
+ */
+function toMsbuildRelativePath(fromDir: string, toPath: string): string {
+	return path.relative(fromDir, toPath).replace(/\//g, '\\');
 }
 
-function stageGuestExecutable(e, t) {
-	if (fs.statSync(e).isDirectory())
-		return (copyDirectoryRecursive(e, t), findFirstByExtension(t, '.exe') ?? path.join(t, path.basename(e)));
-	let n = path.join(t, path.basename(e));
-	return (fs.copyFileSync(e, n), n);
+/**
+ * Copies the user-provided guest-executable payload into the service's `Code/`
+ * folder. Accepts either a single file or a directory; in the directory case
+ * the *contents* are copied (recursively).
+ *
+ * Returns the absolute path of the primary executable inside `Code/`.
+ */
+function stageGuestExecutable(sourcePath: string, codeDir: string): string {
+	if (fs.statSync(sourcePath).isDirectory()) {
+		copyDirectoryRecursive(sourcePath, codeDir);
+		// Pick a sensible "primary" exe — first .exe found, else the source folder name.
+		return findFirstByExtension(codeDir, '.exe') ?? path.join(codeDir, path.basename(sourcePath));
+	}
+	const dest = path.join(codeDir, path.basename(sourcePath));
+	fs.copyFileSync(sourcePath, dest);
+	return dest;
 }
 
-function copyDirectoryRecursive(e, t) {
-	fs.mkdirSync(t, {
-		recursive: !0,
-	});
-	for (let r of fs.readdirSync(e, {
-		withFileTypes: !0,
-	})) {
-		let n = path.join(e, r.name),
-			i = path.join(t, r.name);
-		r.isDirectory() ? copyDirectoryRecursive(n, i) : r.isFile() && fs.copyFileSync(n, i);
+function copyDirectoryRecursive(src: string, dest: string): void {
+	fs.mkdirSync(dest, { recursive: true });
+	for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+		const s = path.join(src, entry.name);
+		const d = path.join(dest, entry.name);
+		if (entry.isDirectory()) copyDirectoryRecursive(s, d);
+		else if (entry.isFile()) fs.copyFileSync(s, d);
 	}
 }
 
-function findFirstByExtension(e, t) {
-	for (let r of fs.readdirSync(e, {
-		withFileTypes: !0,
-	}))
-		if (r.isFile() && r.name.toLowerCase().endsWith(t.toLowerCase())) return path.join(e, r.name);
+function findFirstByExtension(dir: string, ext: string): string | undefined {
+	for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+		if (entry.isFile() && entry.name.toLowerCase().endsWith(ext.toLowerCase())) {
+			return path.join(dir, entry.name);
+		}
+	}
+	return undefined;
 }
-
-export { applyAddService, collectExistingServiceNames };

@@ -1,80 +1,94 @@
-// @ts-nocheck
 import * as vscode from 'vscode';
+import type { SfProjectWatcher } from '../project/projectWatcher';
 import { findAttributeOccurrences, findParameterRefs } from '../util/xmlText';
 
-var ManifestCodeActionProvider = class {
-	constructor(t) {
-		this.watcher = t;
-	}
-	static providedCodeActionKinds = [vscode.CodeActionKind.QuickFix];
-	provideCodeActions(t, r, n) {
-		let i = [];
-		for (let o of n.diagnostics)
-			if (o.source === 'service-fabric') {
-				if (o.code === 'SFD001') i.push(this.addParameterFix(t, o));
-				else if (o.code === 'SFD004') {
-					let s = this.syncVersionFix(t, o);
-					s && i.push(s);
-				}
+/** Quick fixes for the `service-fabric` manifest diagnostics (SFD001, SFD004). */
+export class ManifestCodeActionProvider implements vscode.CodeActionProvider {
+	static readonly providedCodeActionKinds = [vscode.CodeActionKind.QuickFix];
+
+	constructor(private readonly watcher: SfProjectWatcher) {}
+
+	provideCodeActions(
+		document: vscode.TextDocument,
+		_range: vscode.Range | vscode.Selection,
+		context: vscode.CodeActionContext,
+	): vscode.CodeAction[] {
+		const actions: vscode.CodeAction[] = [];
+		for (const diagnostic of context.diagnostics) {
+			if (diagnostic.source !== 'service-fabric') continue;
+			if (diagnostic.code === 'SFD001') {
+				actions.push(this.addParameterFix(document, diagnostic));
+			} else if (diagnostic.code === 'SFD004') {
+				const fix = this.syncVersionFix(document, diagnostic);
+				if (fix) actions.push(fix);
 			}
-		return i;
+		}
+		return actions;
 	}
-	addParameterFix(t, r) {
-		let n = t.getText(),
-			i = findParameterRefs(n),
-			o = t.offsetAt(r.range.start),
-			a = i.find((v) => o >= v.range.start && o <= v.range.end)?.name ?? t.getText(r.range).replace(/[\[\]]/g, ''),
-			c = new vscode.CodeAction(`Add parameter '${a}' to <Parameters>`, vscode.CodeActionKind.QuickFix);
-		((c.diagnostics = [r]), (c.isPreferred = !0));
-		let l = new vscode.WorkspaceEdit(),
-			u = `
-    <Parameter Name="${a}" DefaultValue="" />`,
-			p = /<Parameters\s*>/i,
-			d = /<\/Parameters>/i,
-			f = p.exec(n),
-			m = d.exec(n);
-		if (f && m) {
-			let v = m.index,
-				h = t.positionAt(v);
-			l.insert(
-				t.uri,
-				h,
-				u.trimStart() +
+
+	/** SFD001: declare the referenced `[Param]` in `<Parameters>` (creating the block if needed). */
+	private addParameterFix(document: vscode.TextDocument, diagnostic: vscode.Diagnostic): vscode.CodeAction {
+		const text = document.getText();
+		const refs = findParameterRefs(text);
+		const offset = document.offsetAt(diagnostic.range.start);
+		const name =
+			refs.find((r) => offset >= r.range.start && offset <= r.range.end)?.name ?? document.getText(diagnostic.range).replace(/[\[\]]/g, '');
+		const action = new vscode.CodeAction(`Add parameter '${name}' to <Parameters>`, vscode.CodeActionKind.QuickFix);
+		action.diagnostics = [diagnostic];
+		action.isPreferred = true;
+		const edit = new vscode.WorkspaceEdit();
+		const paramLine = `
+    <Parameter Name="${name}" DefaultValue="" />`;
+		const openRe = /<Parameters\s*>/i;
+		const closeRe = /<\/Parameters>/i;
+		const openMatch = openRe.exec(text);
+		const closeMatch = closeRe.exec(text);
+		if (openMatch && closeMatch) {
+			// Insert just before </Parameters>.
+			const insertAt = document.positionAt(closeMatch.index);
+			edit.insert(
+				document.uri,
+				insertAt,
+				paramLine.trimStart() +
 					`
   `,
 			);
 		} else {
-			let v = /<ApplicationManifest[^>]*>/.exec(n);
-			if (v) {
-				let h = v.index + v[0].length,
-					P = t.positionAt(h);
-				l.insert(
-					t.uri,
-					P,
+			// No <Parameters> block: create one right after the <ApplicationManifest ...> opening tag.
+			const rootMatch = /<ApplicationManifest[^>]*>/.exec(text);
+			if (rootMatch) {
+				const insertAt = document.positionAt(rootMatch.index + rootMatch[0].length);
+				edit.insert(
+					document.uri,
+					insertAt,
 					`
   <Parameters>
-    <Parameter Name="${a}" DefaultValue="" />
+    <Parameter Name="${name}" DefaultValue="" />
   </Parameters>`,
 				);
 			}
 		}
-		return ((c.edit = l), c);
+		action.edit = edit;
+		return action;
 	}
-	syncVersionFix(t, r) {
-		let n = this.watcher.getProjects().find((p) => p.applicationManifest?.path === t.uri.fsPath);
-		if (!n) return;
-		let i = t.getText(),
-			o = findAttributeOccurrences(i, 'ServiceManifestRef', 'ServiceManifestName'),
-			s = t.offsetAt(r.range.start),
-			a = o.find((p) => s >= p.elementRange.start && s <= p.elementRange.end);
-		if (!a) return;
-		let c = n.serviceManifests.find((p) => p.name === a.value);
-		if (!c || !c.version) return;
-		let l = new vscode.CodeAction(`Sync ServiceManifestVersion to '${c.version}'`, vscode.CodeActionKind.QuickFix);
-		((l.diagnostics = [r]), (l.isPreferred = !0));
-		let u = new vscode.WorkspaceEdit();
-		return (u.replace(t.uri, r.range, c.version), (l.edit = u), l);
-	}
-};
 
-export { ManifestCodeActionProvider };
+	/** SFD004: rewrite `ServiceManifestVersion` to the on-disk ServiceManifest version. */
+	private syncVersionFix(document: vscode.TextDocument, diagnostic: vscode.Diagnostic): vscode.CodeAction | undefined {
+		const project = this.watcher.getProjects().find((p) => p.applicationManifest?.path === document.uri.fsPath);
+		if (!project) return undefined;
+		const text = document.getText();
+		const nameAttrs = findAttributeOccurrences(text, 'ServiceManifestRef', 'ServiceManifestName');
+		const offset = document.offsetAt(diagnostic.range.start);
+		const nameAttr = nameAttrs.find((a) => offset >= a.elementRange.start && offset <= a.elementRange.end);
+		if (!nameAttr) return undefined;
+		const sm = project.serviceManifests.find((s) => s.name === nameAttr.value);
+		if (!sm || !sm.version) return undefined;
+		const action = new vscode.CodeAction(`Sync ServiceManifestVersion to '${sm.version}'`, vscode.CodeActionKind.QuickFix);
+		action.diagnostics = [diagnostic];
+		action.isPreferred = true;
+		const edit = new vscode.WorkspaceEdit();
+		edit.replace(document.uri, diagnostic.range, sm.version);
+		action.edit = edit;
+		return action;
+	}
+}

@@ -1,50 +1,57 @@
-// @ts-nocheck
 import * as vscode from 'vscode';
+import type { Logger } from '../util/logger';
 import { findServiceFabricSchema } from './schemaProbe';
 
-async function registerXmlSchemaAssociations(e, t) {
-	let r = vscode.extensions.getExtension('redhat.vscode-xml');
-	if (!r) {
-		t.warn('redhat.vscode-xml is not installed; XML schema features will be limited.');
+/** One `systemId` ↔ glob association accepted by redhat.vscode-xml. */
+interface XmlFileAssociation {
+	systemId: string;
+	pattern: string;
+}
+
+/** The part of redhat.vscode-xml's exported API that we use. */
+interface RedHatXmlApi {
+	addXMLFileAssociations?: (associations: XmlFileAssociation[]) => void;
+}
+
+/**
+ * Registers the Service Fabric service-model XSD with redhat.vscode-xml for
+ * ApplicationManifest.xml and ServiceManifest.xml. Logs and returns if the XML
+ * extension or the XSD can't be found.
+ */
+export async function registerXmlSchemaAssociations(_context: vscode.ExtensionContext, logger: Logger): Promise<void> {
+	const xmlExtension = vscode.extensions.getExtension<RedHatXmlApi | undefined>('redhat.vscode-xml');
+	if (!xmlExtension) {
+		logger.warn('redhat.vscode-xml is not installed; XML schema features will be limited.');
 		return;
 	}
-	let n;
+	let api: RedHatXmlApi | undefined;
 	try {
-		(await r.activate(), (n = r.exports));
-	} catch (c) {
-		t.warn(`Failed to activate redhat.vscode-xml: ${c.message}`);
+		await xmlExtension.activate();
+		api = xmlExtension.exports;
+	} catch (err) {
+		logger.warn(`Failed to activate redhat.vscode-xml: ${(err as Error).message}`);
 		return;
 	}
-	if (!n || typeof n.addXMLFileAssociations != 'function') {
-		t.debug('redhat.vscode-xml does not expose addXMLFileAssociations; relying on user settings.');
+	if (!api || typeof api.addXMLFileAssociations != 'function') {
+		logger.debug('redhat.vscode-xml does not expose addXMLFileAssociations; relying on user settings.');
 		return;
 	}
-	let o = vscode.workspace.getConfiguration('serviceFabric').get('xmlSchemaPath') ?? '',
-		s = findServiceFabricSchema({
-			override: o,
-		});
-	if (!s) {
-		t.warn(
+	const override = vscode.workspace.getConfiguration('serviceFabric').get<string>('xmlSchemaPath') ?? '';
+	const schemaPath = findServiceFabricSchema({ override });
+	if (!schemaPath) {
+		logger.warn(
 			`Service Fabric XSDs not found. Install the Service Fabric SDK (typically under "C:\\Program Files\\Microsoft SDKs\\Service Fabric\\schemas") or set "serviceFabric.xmlSchemaPath" to a folder containing ServiceFabricServiceModel.xsd. Manifest validation will fall back to the extension's in-house diagnostics only.`,
 		);
 		return;
 	}
-	let a = vscode.Uri.file(s).toString();
+	const systemId = vscode.Uri.file(schemaPath).toString();
 	try {
-		(n.addXMLFileAssociations([
-			{
-				systemId: a,
-				pattern: '**/ApplicationManifest.xml',
-			},
-			{
-				systemId: a,
-				pattern: '**/ServiceManifest.xml',
-			},
-		]),
-			t.info(`Registered Service Fabric XSD with redhat.vscode-xml: ${s}`));
-	} catch (c) {
-		t.warn(`Failed to register XML associations: ${c.message}`);
+		api.addXMLFileAssociations([
+			{ systemId, pattern: '**/ApplicationManifest.xml' },
+			{ systemId, pattern: '**/ServiceManifest.xml' },
+		]);
+		logger.info(`Registered Service Fabric XSD with redhat.vscode-xml: ${schemaPath}`);
+	} catch (err) {
+		logger.warn(`Failed to register XML associations: ${(err as Error).message}`);
 	}
 }
-
-export { registerXmlSchemaAssociations };

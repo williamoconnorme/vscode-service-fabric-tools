@@ -1,57 +1,100 @@
-// @ts-nocheck
 import * as vscode from 'vscode';
 import * as path from 'path';
+import type { SfProjectWatcher } from '../project/projectWatcher';
 import { locateMsBuild } from './msbuildLocator';
 
-var ServiceFabricTaskProvider = class e {
-	constructor(t) {
-		this.watcher = t;
-	}
+/** `tasks.json` definition for the `servicefabric` task type. */
+export interface SfTaskDefinition extends vscode.TaskDefinition {
+	type: string;
+	/** Absolute or workspace-relative path to the .sfproj. */
+	project: string;
+	target: string;
+	configuration?: string;
+	platform?: string;
+}
+
+/** Provides Build/Rebuild/Clean/Package tasks for every Service Fabric project in the workspace. */
+export class ServiceFabricTaskProvider implements vscode.TaskProvider {
 	static type = 'servicefabric';
-	async provideTasks(t) {
-		let r = [];
-		for (let n of this.watcher.getProjects())
-			for (let i of ['Build', 'Rebuild', 'Clean', 'Package']) r.push(await createSfBuildTask(n.sfproj.path, i));
-		return r;
-	}
-	async resolveTask(t, r) {
-		let n = t.definition;
-		if (n.type !== e.type || !n.project || !n.target) return;
-		let i = resolveProjectPath(n.project);
-		if (i) return createSfBuildTask(i, n.target, n.configuration, n.platform, t.scope);
-	}
-};
 
-function resolveProjectPath(e) {
-	if (path.isAbsolute(e)) return e;
-	let t = vscode.workspace.workspaceFolders?.[0];
-	if (t) return path.join(t.uri.fsPath, e);
+	constructor(private readonly watcher: SfProjectWatcher) {}
+
+	async provideTasks(_token?: vscode.CancellationToken): Promise<vscode.Task[]> {
+		const tasks: vscode.Task[] = [];
+		for (const project of this.watcher.getProjects()) {
+			for (const target of ['Build', 'Rebuild', 'Clean', 'Package']) {
+				tasks.push(await createSfBuildTask(project.sfproj.path, target));
+			}
+		}
+		return tasks;
+	}
+
+	async resolveTask(task: vscode.Task, _token?: vscode.CancellationToken): Promise<vscode.Task | undefined> {
+		const definition = task.definition as SfTaskDefinition;
+		if (definition.type !== ServiceFabricTaskProvider.type || !definition.project || !definition.target) return undefined;
+		const projectPath = resolveProjectPath(definition.project);
+		if (projectPath) {
+			return createSfBuildTask(projectPath, definition.target, definition.configuration, definition.platform, task.scope);
+		}
+		return undefined;
+	}
 }
 
-async function createSfBuildTask(e, t, r = 'Debug', n = 'x64', i) {
-	let o = await locateMsBuild(),
-		s = [...o.leadingArgs, e, `/t:${t}`, `/p:Configuration=${r}`, `/p:Platform=${n}`, '/nologo', '/v:minimal'],
-		a = new vscode.ProcessExecution(o.executable, s),
-		c = {
-			type: ServiceFabricTaskProvider.type,
-			project: e,
-			target: t,
-			configuration: r,
-			platform: n,
-		},
-		l = new vscode.Task(c, i ?? vscode.TaskScope.Workspace, `${t} ${path.basename(e)}`, 'servicefabric', a, ['$msCompile']);
-	return (
-		(l.detail = `${o.description}`),
-		(l.group = t === 'Build' || t === 'Rebuild' ? vscode.TaskGroup.Build : t === 'Clean' ? vscode.TaskGroup.Clean : vscode.TaskGroup.Build),
-		(l.presentationOptions = {
-			echo: !0,
-			reveal: vscode.TaskRevealKind.Always,
-			focus: !1,
-			panel: vscode.TaskPanelKind.Dedicated,
-			clear: !0,
-		}),
-		l
+/** Resolves a task's `project` against the first workspace folder when it isn't absolute. */
+function resolveProjectPath(project: string): string | undefined {
+	if (path.isAbsolute(project)) return project;
+	const folder = vscode.workspace.workspaceFolders?.[0];
+	if (folder) return path.join(folder.uri.fsPath, project);
+	return undefined;
+}
+
+/** Builds a `vscode.Task` that runs MSBuild `target` on `sfprojPath`. */
+export async function createSfBuildTask(
+	sfprojPath: string,
+	target: string,
+	configuration = 'Debug',
+	platform = 'x64',
+	scope?: vscode.WorkspaceFolder | vscode.TaskScope,
+): Promise<vscode.Task> {
+	const msbuild = await locateMsBuild();
+	const args = [
+		...msbuild.leadingArgs,
+		sfprojPath,
+		`/t:${target}`,
+		`/p:Configuration=${configuration}`,
+		`/p:Platform=${platform}`,
+		'/nologo',
+		'/v:minimal',
+	];
+	const execution = new vscode.ProcessExecution(msbuild.executable, args);
+	const definition: SfTaskDefinition = {
+		type: ServiceFabricTaskProvider.type,
+		project: sfprojPath,
+		target,
+		configuration,
+		platform,
+	};
+	const task = new vscode.Task(
+		definition,
+		scope ?? vscode.TaskScope.Workspace,
+		`${target} ${path.basename(sfprojPath)}`,
+		'servicefabric',
+		execution,
+		['$msCompile'],
 	);
+	task.detail = `${msbuild.description}`;
+	task.group =
+		target === 'Build' || target === 'Rebuild'
+			? vscode.TaskGroup.Build
+			: target === 'Clean'
+				? vscode.TaskGroup.Clean
+				: vscode.TaskGroup.Build;
+	task.presentationOptions = {
+		echo: true,
+		reveal: vscode.TaskRevealKind.Always,
+		focus: false,
+		panel: vscode.TaskPanelKind.Dedicated,
+		clear: true,
+	};
+	return task;
 }
-
-export { ServiceFabricTaskProvider, createSfBuildTask };

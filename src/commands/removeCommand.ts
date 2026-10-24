@@ -1,62 +1,78 @@
-// @ts-nocheck
 import * as vscode from 'vscode';
-import { resolveTargetProject } from './buildCommands';
+import { resolveTargetProject, type ProjectCommandTarget, type ProjectLookup } from './buildCommands';
 import { runPowerShell } from '../cluster/powerShellRunner';
 import { SfRestClient } from '../cluster/sfRestClient';
+import type { ClusterKind, ConnectionStore } from '../cluster/connectionStore';
+import type { LocalClusterManager } from '../cluster/localCluster';
+import type { Logger } from '../util/logger';
 
-function toClientConnectionEndpoint(e) {
-	if (!e || typeof e != 'string') throw new Error(`Invalid Service Fabric endpoint: ${JSON.stringify(e)}`);
-	let t;
+/**
+ * Convert a cluster HTTP gateway URL into the `host:port` client connection
+ * endpoint `Connect-ServiceFabricCluster` expects. The default gateway port
+ * 19080 maps to the default client TCP port 19000; any other port is kept.
+ */
+function toClientConnectionEndpoint(endpoint: string): string {
+	if (!endpoint || typeof endpoint != 'string') throw new Error(`Invalid Service Fabric endpoint: ${JSON.stringify(endpoint)}`);
+	let url: URL;
 	try {
-		t = new URL(e.trim());
+		url = new URL(endpoint.trim());
 	} catch {
-		throw new Error(`Invalid Service Fabric endpoint: '${e}'. Expected an http(s) URL like 'http://localhost:19080'.`);
+		throw new Error(`Invalid Service Fabric endpoint: '${endpoint}'. Expected an http(s) URL like 'http://localhost:19080'.`);
 	}
-	if (!t.hostname) throw new Error(`Invalid Service Fabric endpoint: '${e}' has no host.`);
-	let r = t.port || (t.protocol === 'https:' ? '443' : '80'),
-		n = Number.parseInt(r, 10),
-		i = n === 19080 ? 19e3 : n;
-	return `${t.hostname}:${i}`;
+	if (!url.hostname) throw new Error(`Invalid Service Fabric endpoint: '${endpoint}' has no host.`);
+	const portText = url.port || (url.protocol === 'https:' ? '443' : '80');
+	const port = Number.parseInt(portText, 10);
+	const clientPort = port === 19080 ? 19000 : port;
+	return `${url.hostname}:${clientPort}`;
 }
 
-async function removeApplication(e, t, r, n, i) {
+/**
+ * `serviceFabric.remove`: tear down every instance of the project's
+ * application type on the active cluster and unregister the type.
+ */
+export async function removeApplication(
+	watcher: ProjectLookup,
+	connections: ConnectionStore,
+	localCluster: LocalClusterManager,
+	logger: Logger,
+	target?: ProjectCommandTarget,
+): Promise<void> {
 	if (process.platform !== 'win32') {
 		vscode.window.showWarningMessage('Remove is supported on Windows only \u2014 the Service Fabric SDK is required.');
 		return;
 	}
-	let o = await resolveTargetProject(e, i);
-	if (!o) return;
-	let s = o.applicationManifest;
-	if (!s) {
+	const project = await resolveTargetProject(watcher, target);
+	if (!project) return;
+	const manifest = project.applicationManifest;
+	if (!manifest) {
 		vscode.window.showErrorMessage('Application manifest could not be loaded.');
 		return;
 	}
-	let a = t.getActive();
-	if (!a) {
+	const active = connections.getActive();
+	if (!active) {
 		vscode.window.showErrorMessage('No active cluster. Use "Connect to Local Cluster" first.');
 		return;
 	}
 	if (
-		(vscode.workspace.getConfiguration('serviceFabric').get('confirmDestructiveActions') ?? !0) &&
+		(vscode.workspace.getConfiguration('serviceFabric').get<boolean>('confirmDestructiveActions') ?? true) &&
 		(await vscode.window.showWarningMessage(
-			`Remove application '${s.applicationTypeName}' (v${s.applicationTypeVersion}) from ${a.label}?`,
-			{
-				modal: !0,
-			},
+			`Remove application '${manifest.applicationTypeName}' (v${manifest.applicationTypeVersion}) from ${active.label}?`,
+			{ modal: true },
 			'Remove',
 		)) !== 'Remove'
-	)
-		return;
-	let l;
-	try {
-		l = toClientConnectionEndpoint(a.endpoint);
-	} catch (v) {
-		vscode.window.showErrorMessage(`Cannot derive a client connection endpoint from ${a.endpoint}: ${v.message}`);
+	) {
 		return;
 	}
-	if (!(await ensureClusterReachableForRemove(a.endpoint, a.kind, n))) return;
-	let p = `fabric:/${s.applicationTypeName}`,
-		d = `
+	let clientEndpoint: string;
+	try {
+		clientEndpoint = toClientConnectionEndpoint(active.endpoint);
+	} catch (err) {
+		vscode.window.showErrorMessage(`Cannot derive a client connection endpoint from ${active.endpoint}: ${(err as Error).message}`);
+		return;
+	}
+	if (!(await ensureClusterReachableForRemove(active.endpoint, active.kind, logger))) return;
+	const applicationName = `fabric:/${manifest.applicationTypeName}`;
+	const script = `
 $ErrorActionPreference = 'Stop'
 try {
     Import-Module ServiceFabric -Global -ErrorAction Stop
@@ -139,55 +155,63 @@ if ($stillThere.Count -gt 0) {
     Write-Host "Application type '$ApplicationTypeName' removed."
 }
 `;
-	(n.show(), n.info(`Connecting to ${l} (client TCP) for remove...`));
-	let f = vscode.workspace.getConfiguration('serviceFabric').get('remove.waitSeconds') ?? 30,
-		m = await runPowerShell(n, d, {
-			ClientEndpoint: l,
-			ApplicationName: p,
-			ApplicationTypeName: s.applicationTypeName,
-			WaitSeconds: String(Math.max(0, Math.floor(f))),
-		});
-	m.exitCode === 0
-		? (vscode.window.showInformationMessage(`Removed ${p} from ${a.label}.`), await r.refresh(a))
-		: vscode.window.showErrorMessage(`Remove failed (exit code ${m.exitCode}). See the Service Fabric output channel.`);
+	logger.show();
+	logger.info(`Connecting to ${clientEndpoint} (client TCP) for remove...`);
+	const waitSeconds = vscode.workspace.getConfiguration('serviceFabric').get<number>('remove.waitSeconds') ?? 30;
+	const result = await runPowerShell(logger, script, {
+		ClientEndpoint: clientEndpoint,
+		ApplicationName: applicationName,
+		ApplicationTypeName: manifest.applicationTypeName,
+		WaitSeconds: String(Math.max(0, Math.floor(waitSeconds))),
+	});
+	if (result.exitCode === 0) {
+		vscode.window.showInformationMessage(`Removed ${applicationName} from ${active.label}.`);
+		await localCluster.refresh(active);
+	} else {
+		vscode.window.showErrorMessage(`Remove failed (exit code ${result.exitCode}). See the Service Fabric output channel.`);
+	}
 }
 
-async function ensureClusterReachableForRemove(e, t, r) {
-	r.info(`Probing cluster gateway ${e}...`);
-	let n = new SfRestClient(e);
+/**
+ * Probe the cluster's HTTP gateway before running the remove script. On a
+ * failed probe, local clusters get a "Start Local Cluster" offer; any cluster
+ * can be force-continued. Returns `false` to abort.
+ */
+async function ensureClusterReachableForRemove(endpoint: string, kind: ClusterKind, logger: Logger): Promise<boolean> {
+	logger.info(`Probing cluster gateway ${endpoint}...`);
+	const client = new SfRestClient(endpoint);
 	try {
-		return (await n.getClusterHealth(5e3), r.info('Cluster probe ok.'), !0);
-	} catch (o) {
-		r.warn(`Cluster probe failed: ${o.message}`);
+		await client.getClusterHealth(5000);
+		logger.info('Cluster probe ok.');
+		return true;
+	} catch (err) {
+		logger.warn(`Cluster probe failed: ${(err as Error).message}`);
 	}
-	if (t === 'local') {
-		let o = await vscode.window.showErrorMessage(
-			`Local Service Fabric cluster at ${e} isn't responding. Remove needs an active cluster connection.`,
-			{
-				modal: !0,
-			},
+	if (kind === 'local') {
+		const choice = await vscode.window.showErrorMessage(
+			`Local Service Fabric cluster at ${endpoint} isn't responding. Remove needs an active cluster connection.`,
+			{ modal: true },
 			'Start Local Cluster',
 			'Continue Anyway',
 		);
-		if (o === 'Start Local Cluster') {
+		if (choice === 'Start Local Cluster') {
 			await vscode.commands.executeCommand('serviceFabric.cluster.startLocal');
 			try {
-				return (await n.getClusterHealth(1e4), r.info('Cluster probe ok after start.'), !0);
-			} catch (s) {
-				return (vscode.window.showErrorMessage(`Cluster still unreachable after start: ${s.message}. Aborting remove.`), !1);
+				await client.getClusterHealth(10000);
+				logger.info('Cluster probe ok after start.');
+				return true;
+			} catch (err) {
+				vscode.window.showErrorMessage(`Cluster still unreachable after start: ${(err as Error).message}. Aborting remove.`);
+				return false;
 			}
 		}
-		return o === 'Continue Anyway';
+		return choice === 'Continue Anyway';
 	}
 	return (
 		(await vscode.window.showErrorMessage(
-			`Service Fabric cluster at ${e} isn't responding. Verify the cluster is online and the connection settings are correct.`,
-			{
-				modal: !0,
-			},
+			`Service Fabric cluster at ${endpoint} isn't responding. Verify the cluster is online and the connection settings are correct.`,
+			{ modal: true },
 			'Continue Anyway',
 		)) === 'Continue Anyway'
 	);
 }
-
-export { removeApplication };
