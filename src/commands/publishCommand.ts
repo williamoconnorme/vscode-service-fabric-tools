@@ -83,12 +83,22 @@ export async function publishApplication(
 	const packageTask = await createSfBuildTask(project.sfproj.path, 'Package');
 	const execution = await vscode.tasks.executeTask(packageTask);
 	await new Promise<void>((resolve, reject) => {
-		const sub = vscode.tasks.onDidEndTaskProcess((e) => {
-			if (e.execution === execution) {
-				sub.dispose();
-				if (e.exitCode === 0) resolve();
-				else reject(new Error(`Package failed with exit code ${e.exitCode}.`));
-			}
+		const done = () => {
+			processSub.dispose();
+			taskSub.dispose();
+		};
+		const processSub = vscode.tasks.onDidEndTaskProcess((e) => {
+			if (e.execution !== execution) return;
+			done();
+			if (e.exitCode === 0) resolve();
+			else reject(new Error(`Package failed with exit code ${e.exitCode}.`));
+		});
+		// A task that fails to start (or is terminated before its process
+		// exits) ends without an onDidEndTaskProcess event.
+		const taskSub = vscode.tasks.onDidEndTask((e) => {
+			if (e.execution !== execution) return;
+			done();
+			reject(new Error('Package task ended without its process completing.'));
 		});
 	});
 

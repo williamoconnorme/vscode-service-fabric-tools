@@ -69,12 +69,9 @@ export class DiagnosticEventsPanel implements vscode.Disposable {
 		this.timer = setInterval(() => this.poll(), POLL_INTERVAL_MS);
 	}
 
-	/**
-	 * Posts state to the webview. Callers have checked `this.panel` before their
-	 * `await`; if the panel is disposed mid-poll this throws, as upstream does.
-	 */
+	/** Posts state to the webview; a no-op if the panel was closed while a poll was in flight. */
 	private postState(state: DiagnosticEventsState): void {
-		this.panel!.webview.postMessage({ type: 'state', state });
+		this.panel?.webview.postMessage({ type: 'state', state });
 	}
 
 	async poll(): Promise<void> {

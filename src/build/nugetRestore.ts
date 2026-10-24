@@ -346,13 +346,12 @@ async function extractNupkg(nupkgPath: string, targetDir: string): Promise<void>
 		const dataStart = localHeaderOffset + 30 + localNameLen + localExtraLen;
 		const compressed = buf.slice(dataStart, dataStart + compSize);
 		// Skip directory entries (NuGet packs them as zero-length entries with trailing slashes).
-		if (name.endsWith('/')) {
-			const dirAbs = path.join(targetDir, ...name.split('/').filter(Boolean));
-			fs.mkdirSync(dirAbs, { recursive: true });
-			continue;
-		}
 		// Sanitize the entry name to prevent zip-slip.
 		const safeRel = sanitizeEntryName(name);
+		if (name.endsWith('/')) {
+			if (safeRel) fs.mkdirSync(path.join(targetDir, safeRel), { recursive: true });
+			continue;
+		}
 		if (!safeRel) continue;
 		const fileAbs = path.join(targetDir, safeRel);
 		fs.mkdirSync(path.dirname(fileAbs), { recursive: true });

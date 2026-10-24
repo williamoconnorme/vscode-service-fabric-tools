@@ -1147,7 +1147,7 @@ namespace ${s.rootNamespace}
             return new[]
             {
                 new ServiceInstanceListener(serviceContext =>
-                    new KestrelCommunicationListener(serviceContext, "ServiceEndpoint", (url, listener) =>
+                    new KestrelCommunicationListener(serviceContext, "${t.endpointName ?? 'ServiceEndpoint'}", (url, listener) =>
                     {
                         var builder = WebApplication.CreateBuilder();
 
@@ -1204,7 +1204,7 @@ namespace ${s.rootNamespace}
             return new[]
             {
                 new ServiceReplicaListener(serviceContext =>
-                    new KestrelCommunicationListener(serviceContext, "ServiceEndpoint", (url, listener) =>
+                    new KestrelCommunicationListener(serviceContext, "${t.endpointName ?? 'ServiceEndpoint'}", (url, listener) =>
                     {
                         var builder = WebApplication.CreateBuilder();
 

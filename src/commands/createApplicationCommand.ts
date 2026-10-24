@@ -45,8 +45,8 @@ export async function runCreateApplicationCommand(logger: Logger): Promise<void>
 		const frameworks: FrameworkQuickPickItem[] =
 			isAspNetKind(kind) || runtime === 'netcore'
 				? [
-						{ label: 'net8.0', description: 'Recommended (LTS)', value: 'net8.0' },
-						{ label: 'net6.0', description: 'LTS', value: 'net6.0' },
+						{ label: 'net10.0', description: 'Recommended (current LTS, until Nov 2028)', value: 'net10.0' },
+						{ label: 'net8.0', description: 'LTS (until Nov 2026)', value: 'net8.0' },
 					]
 				: [
 						{ label: 'net472', description: '.NET Framework 4.7.2 (classic Service Fabric SDK)', value: 'net472' },

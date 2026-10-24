@@ -71,7 +71,6 @@ export async function removeApplication(
 		return;
 	}
 	if (!(await ensureClusterReachableForRemove(active.endpoint, active.kind, logger))) return;
-	const applicationName = `fabric:/${manifest.applicationTypeName}`;
 	const script = `
 $ErrorActionPreference = 'Stop'
 try {
@@ -160,12 +159,13 @@ if ($stillThere.Count -gt 0) {
 	const waitSeconds = vscode.workspace.getConfiguration('serviceFabric').get<number>('remove.waitSeconds') ?? 30;
 	const result = await runPowerShell(logger, script, {
 		ClientEndpoint: clientEndpoint,
-		ApplicationName: applicationName,
 		ApplicationTypeName: manifest.applicationTypeName,
 		WaitSeconds: String(Math.max(0, Math.floor(waitSeconds))),
 	});
 	if (result.exitCode === 0) {
-		vscode.window.showInformationMessage(`Removed ${applicationName} from ${active.label}.`);
+		vscode.window.showInformationMessage(
+			`Removed application type '${manifest.applicationTypeName}' and its instances from ${active.label}.`,
+		);
 		await localCluster.refresh(active);
 	} else {
 		vscode.window.showErrorMessage(`Remove failed (exit code ${result.exitCode}). See the Service Fabric output channel.`);

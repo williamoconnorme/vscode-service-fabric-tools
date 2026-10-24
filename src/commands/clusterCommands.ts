@@ -47,7 +47,14 @@ export async function connectRemoteCluster(store: ConnectionStore, local: LocalC
 	const endpoint = await vscode.window.showInputBox({
 		prompt: 'Enter Service Fabric HTTP gateway endpoint',
 		placeHolder: 'https://my-cluster.eastus.cloudapp.azure.com:19080',
-		validateInput: (value) => (/^https?:\/\//.test(value) ? null : 'Must start with http:// or https://'),
+		validateInput: (value) => {
+			if (!/^https?:\/\//.test(value)) return 'Must start with http:// or https://';
+			try {
+				return new URL(value).hostname ? null : 'Must include a host name';
+			} catch {
+				return 'Not a valid URL';
+			}
+		},
 	});
 	if (!endpoint) return;
 	const label = await vscode.window.showInputBox({
@@ -127,11 +134,13 @@ Stop-Service FabricHostSvc -Force -ErrorAction SilentlyContinue
 /**
  * `serviceFabric.cluster.resetLocal`: cleans the dev cluster and sets it up again.
  * Asks for confirmation when `serviceFabric.confirmDestructiveActions` is on. `nodeCount`
- * skips the mode prompt (used by {@link switchLocalClusterMode}).
+ * skips the mode prompt and `confirmed` skips the confirmation; {@link switchLocalClusterMode}
+ * passes both because it has already asked.
  */
-export async function resetLocalCluster(logger: Logger, nodeCount?: LocalClusterNodeCount): Promise<void> {
+export async function resetLocalCluster(logger: Logger, nodeCount?: LocalClusterNodeCount, confirmed = false): Promise<void> {
 	if (process.platform !== 'win32') return;
 	if (
+		!confirmed &&
 		(vscode.workspace.getConfiguration('serviceFabric').get<boolean>('confirmDestructiveActions') ?? true) &&
 		(await vscode.window.showWarningMessage(
 			'Reset the local Service Fabric cluster? All deployed applications will be removed.',
@@ -175,7 +184,7 @@ export async function switchLocalClusterMode(logger: Logger): Promise<void> {
 	) {
 		return;
 	}
-	await resetLocalCluster(logger, mode);
+	await resetLocalCluster(logger, mode, true);
 	await vscode.workspace.getConfiguration('serviceFabric').update('localCluster.nodeCount', mode, vscode.ConfigurationTarget.Global);
 }
 
