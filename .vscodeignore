@@ -15,5 +15,6 @@ esbuild.config.mjs
 .claude/**
 scripts/**
 media/icon.svg
+media/screenshots/**
 test/**
 out-test/**

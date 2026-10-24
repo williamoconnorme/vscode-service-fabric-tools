@@ -157,7 +157,8 @@ export class ApplicationsTreeProvider implements vscode.TreeDataProvider<Applica
 	}
 
 	private makeServiceFolderNode(project: ApplicationProject, sm: ServiceManifest): ApplicationTreeItem {
-		const folderName = path.basename(sm.packageDirectory);
+		// The manifest's Name: services in their own project keep the package in a folder called PackageRoot.
+		const folderName = sm.name || path.basename(sm.packageDirectory);
 		const folderUri = vscode.Uri.file(sm.packageDirectory);
 		const children: ApplicationTreeItem[] = [
 			new ApplicationTreeItem(

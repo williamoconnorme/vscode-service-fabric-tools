@@ -737,7 +737,7 @@ export async function pickPublishTarget(
 	const items: Item[] = [];
 	if (profiles.length > 0) {
 		items.push({ label: 'Publish profiles', kind: vscode.QuickPickItemKind.Separator });
-		for (const p of profiles) items.push({ label: `$(file) ${path.basename(p)}`, description: p, target: { kind: 'profile', path: p } });
+		for (const p of profiles) items.push({ label: `$(file) ${path.basename(p)}`, description: vscode.workspace.asRelativePath(p), target: { kind: 'profile', path: p } });
 	}
 	if (ordered.length > 0) {
 		items.push({ label: 'Saved clusters', kind: vscode.QuickPickItemKind.Separator });
@@ -776,7 +776,7 @@ async function pickApplicationParameterFile(files: string[], pairedFile: string 
 		},
 		...files.map((f) => ({
 			label: path.basename(f),
-			description: f,
+			description: vscode.workspace.asRelativePath(f),
 			value: f,
 			picked: pairedFile !== undefined && path.normalize(f).toLowerCase() === path.normalize(pairedFile).toLowerCase(),
 		})),

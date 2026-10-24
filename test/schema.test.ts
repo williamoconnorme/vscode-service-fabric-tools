@@ -184,6 +184,23 @@ test('container service scaffolds are schema-valid, with and without port and re
 	}
 });
 
+test('added parameters and imports are indented like the rest of the manifest', () => {
+	let xml = buildApplicationManifestXml({ applicationName: 'App', serviceName: 'Web', projectGuid: '0', kind: 'aspNetStateless' });
+	xml = patchApplicationManifest(xml, { serviceName: 'Gw', serviceTypeName: 'GwType', kind: 'container', version: '1.0.0', containerImage: 'x', registryCredentials: true });
+	xml = patchApplicationManifest(xml, { serviceName: 'Cart', serviceTypeName: 'CartType', kind: 'actor', version: '1.0.0', runtime: 'netcore' });
+	for (const line of xml.split('\n').filter((l) => /<Parameter Name=/.test(l))) assert.match(line, /^ {4}<Parameter /, line);
+	assert.match(xml, /<ServiceManifestRef ServiceManifestName="CartPkg" ServiceManifestVersion="1\.0\.0" \/>\n {2}<\/ServiceManifestImport>/);
+	const empty = patchApplicationManifest(buildApplicationManifestXml({ applicationName: 'A', serviceName: 'S', projectGuid: '0' }), {
+		serviceName: 'Gw',
+		serviceTypeName: 'GwType',
+		kind: 'container',
+		version: '1.0.0',
+		containerImage: 'x',
+		registryCredentials: true,
+	});
+	assert.match(empty, /<Parameters>\n {4}<Parameter Name="Gw_RegistryUserName"[^\n]*\n {4}<Parameter Name="Gw_RegistryPassword"[^\n]*\n( {4}<Parameter [^\n]*\n)* {2}<\/Parameters>/);
+});
+
 test('validator reports unknown elements and attributes, missing required ones and bad enum values', () => {
 	// ServiceManifest itself accepts any attribute (xs:anyAttribute); CodePackage does not.
 	const text = `<ServiceManifest xmlns="${NS}" Name="S" Custom="ok">

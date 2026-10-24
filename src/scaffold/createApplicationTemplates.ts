@@ -196,7 +196,8 @@ export function buildApplicationManifestXml(t: CreateApplicationTemplate): strin
 	//   ASP.NET -> <ConfigOverrides /> + <EnvironmentOverrides>
 	let importBody: string;
 	if (r.kind === 'actor') {
-		importBody = '';
+		importBody = `
+  `;
 	} else if (isAspNetKind(r.kind)) {
 		importBody = `
     <ConfigOverrides />

@@ -12,6 +12,8 @@
 | `npm test` | Run the unit tests (`test/`) |
 | `npm run package` | Write a `.vsix` to `artifacts/` |
 | `npm run schema` | Regenerate the bundled Service Fabric schema from the SDK's XSD |
+| `npm run icon-font` | Rebuild `media/sf-icons.woff` (the status bar icon) |
+| `npm run screenshots` | Recapture `media/screenshots/` against a fake "Contoso" cluster (needs VS Code installed) |
 
 Disable the original *Service Fabric Project (sfproj) Tools* extension while you work: both register the same command and view IDs.
 

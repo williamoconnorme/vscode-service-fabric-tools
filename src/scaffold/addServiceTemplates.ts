@@ -338,6 +338,21 @@ ${exeHostInner.join(`
 }
 
 /**
+ * Inserts `lines` (already indented) on their own lines just before the first
+ * `</tag>`, keeping the closing tag's indentation. Handles `<tag></tag>` on one line.
+ */
+function insertBeforeClosingTag(xml: string, tag: string, lines: string): string {
+	const close = xml.indexOf(`</${tag}>`);
+	if (close < 0) return xml;
+	const eol = xml.includes('\r\n') ? '\r\n' : '\n';
+	const body = lines.replace(/\r?\n/g, eol);
+	const lineStart = xml.lastIndexOf('\n', close - 1) + 1;
+	if (xml.slice(lineStart, close).trim() === '') return `${xml.slice(0, lineStart)}${body}${eol}${xml.slice(lineStart)}`;
+	const indent = /^[ \t]*/.exec(xml.slice(lineStart))![0];
+	return `${xml.slice(0, close)}${eol}${body}${eol}${indent}${xml.slice(close)}`;
+}
+
+/**
  * Empty Settings.xml stub used by the new Config package.
  */
 export function buildSettingsXml(): string {
@@ -394,11 +409,7 @@ ${newParamLines}
   </Parameters>`,
 		);
 	} else if (/<Parameters\b[^>]*>[\s\S]*?<\/Parameters>/.test(out)) {
-		out = out.replace(
-			/(<\/Parameters>)/,
-			`${newParamLines}
-  $1`,
-		);
+		out = insertBeforeClosingTag(out, 'Parameters', newParamLines);
 	} else {
 		out = out.replace(
 			/(<ApplicationManifest\b[^>]*>)/,
@@ -457,11 +468,7 @@ ${newParamLines}
   </Parameters>`,
 			);
 		} else if (/<Parameters\b[^>]*>[\s\S]*?<\/Parameters>/.test(out)) {
-			out = out.replace(
-				/(<\/Parameters>)/,
-				`${newParamLines}
-  $1`,
-			);
+			out = insertBeforeClosingTag(out, 'Parameters', newParamLines);
 		} else {
 			// No <Parameters> block: insert one right after the opening tag.
 			out = out.replace(
@@ -476,7 +483,8 @@ ${newParamLines}
 	// 2. Add <ServiceManifestImport> block — kind-specific.
 	let importBody: string;
 	if (t.kind === 'actor') {
-		importBody = '';
+		importBody = `
+  `;
 	} else if (isAspNetKind(t.kind)) {
 		importBody = `
     <ConfigOverrides />
@@ -597,11 +605,7 @@ ${lines}
   </Parameters>`,
 			);
 		} else if (/<\/Parameters>/.test(out)) {
-			out = out.replace(
-				/(<\/Parameters>)/,
-				`${lines}
-  $1`,
-			);
+			out = insertBeforeClosingTag(out, 'Parameters', lines);
 		} else {
 			out = out.replace(
 				/(<StartupServicesManifest\b[^>]*>)/,
@@ -681,11 +685,7 @@ ${lines}
   </Parameters>`,
 		);
 	} else if (/<\/Parameters>/.test(out)) {
-		out = out.replace(
-			/(<\/Parameters>)/,
-			`${lines}
-  $1`,
-		);
+		out = insertBeforeClosingTag(out, 'Parameters', lines);
 	} else {
 		// Fall back to inserting after the root tag (which is <StartupServices ...>
 		// in the VS template).
@@ -778,11 +778,7 @@ ${lines}
   </Parameters>`,
 		);
 	} else if (/<\/Parameters>/.test(out)) {
-		out = out.replace(
-			/(<\/Parameters>)/,
-			`${lines}
-  $1`,
-		);
+		out = insertBeforeClosingTag(out, 'Parameters', lines);
 	} else {
 		out = out.replace(
 			/(<Application\b[^>]*>)/,

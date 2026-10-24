@@ -4,6 +4,8 @@ Build, publish and debug Azure Service Fabric applications (`.sfproj`) in VS Cod
 
 > This extension is a fork of [Service Fabric Project (sfproj) Tools](https://marketplace.visualstudio.com/items?itemName=sfproj-tools.service-fabric-project-tools-vscode) by **sfproj-tools**, continued from version 1.1.11 under the MIT license. It is not affiliated with or endorsed by Microsoft.
 
+![The Clusters view with an application mid-upgrade](media/screenshots/clusters-view.png)
+
 ## Features
 
 **Projects and authoring**
@@ -32,6 +34,24 @@ Build, publish and debug Azure Service Fabric applications (`.sfproj`) in VS Cod
 **Local development (Windows)**
 - Start, stop, reset and switch the local dev cluster between 1-node and 5-node.
 - Attach the .NET debugger to a deployed service, or automatically after each publish.
+
+## Screenshots
+
+**Upgrade controls** for an application that is upgrading:
+
+![Resume, change or roll back an upgrade](media/screenshots/upgrade-controls.png)
+
+**Manifest IntelliSense**: completion and hover docs from the Service Fabric schema:
+
+![Completion in ServiceManifest.xml](media/screenshots/manifest-completion.png)
+
+**Publish** to a publish profile or straight to a saved cluster:
+
+![The Publish target picker](media/screenshots/publish-picker.png)
+
+**Applications view** and scaffolded manifests:
+
+![The Applications view](media/screenshots/applications-view.png)
 
 ## Requirements
 

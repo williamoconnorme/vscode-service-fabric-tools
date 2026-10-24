@@ -1495,7 +1495,8 @@
         "format": "prettier --write \"src/**/*.ts\"",
         "package": "node -e \"require('fs').mkdirSync('artifacts',{recursive:true})\" && vsce package --no-dependencies --out artifacts/",
         "icons": "node scripts/generate-icons.js",
-        "icon-font": "node scripts/generate-icon-font.mjs"
+        "icon-font": "node scripts/generate-icon-font.mjs",
+        "screenshots": "npm run package && node scripts/screenshots/run.mjs"
     },
     "devDependencies": {
         "@resvg/resvg-js": "^2.6.2",
@@ -1503,6 +1504,7 @@
         "@types/vscode": "^1.90.0",
         "@vscode/vsce": "^3.9.1",
         "esbuild": "^0.24.0",
+        "playwright-core": "^1.48.2",
         "prettier": "^3.3.3",
         "svg2ttf": "^6.0.3",
         "ttf2woff": "^3.0.0",
