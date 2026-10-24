@@ -241,7 +241,9 @@ The extension picks the first available MSBuild in this order:
 
 1. `serviceFabric.msbuildPath` setting, if non-empty.
 2. `vswhere.exe -latest -find MSBuild\\**\\Bin\\MSBuild.exe` (Visual Studio 2022 / Build Tools).
-3. `dotnet msbuild` from the .NET SDK. This is the path on macOS / Linux. The Service Fabric MSBuild targets (`Microsoft.VisualStudio.Azure.Fabric.MSBuild` 1.7.9) load and run under .NET MSBuild, so **Package** works. The extension adds `-restore` so the service projects' `PackageReference`s are restored first (Visual Studio does that implicitly). The package lands in `pkg\<Configuration>\<AppName>\`.
+3. `dotnet msbuild` from the .NET SDK. This is the path on macOS / Linux. The Service Fabric MSBuild targets (`Microsoft.VisualStudio.Azure.Fabric.MSBuild` 1.7.9) load and run under .NET MSBuild, so **Package** works. The package lands in `pkg\<Configuration>\<AppName>\`.
+
+Build, Rebuild and Package pass `-restore` whichever MSBuild is used, so the service projects' `PackageReference`s are restored first (the Visual Studio IDE does that implicitly; command-line MSBuild doesn't).
 
 Check the **Service Fabric** output channel after a build to see which path was used.
 

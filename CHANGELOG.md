@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.1
+
+- **Fix: Build failed with `NETSDK1004` (`project.assets.json` not found) on a freshly created application.** The Build / Rebuild / Package tasks passed `-restore` only to `dotnet msbuild`; they now pass it to Visual Studio's `MSBuild.exe` too, which also doesn't restore the service projects' `PackageReference`s from the command line.
+
 ## 1.2.0
 
 First release as **Service Fabric Tools**, a fork of [Service Fabric Project (sfproj) Tools](https://marketplace.visualstudio.com/items?itemName=sfproj-tools.service-fabric-project-tools-vscode) 1.1.11.

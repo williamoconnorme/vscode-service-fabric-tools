@@ -2,7 +2,7 @@
     "name": "service-fabric-tools",
     "displayName": "Service Fabric Tools",
     "description": "Author, build, package, publish and debug Azure Service Fabric applications (.sfproj) on Windows, macOS and Linux, and explore your clusters.",
-    "version": "1.2.0",
+    "version": "1.2.1",
     "publisher": "williamoconnor",
     "license": "MIT",
     "repository": {
