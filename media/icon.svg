@@ -1,28 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#2e3648"/>
-      <stop offset="1" stop-color="#141922"/>
+    <linearGradient id="node" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f9a11b"/>
+      <stop offset="1" stop-color="#f07000"/>
     </linearGradient>
-    <!-- vertical in screen space despite the group's 45° rotation -->
-    <linearGradient id="node" x1="0" y1="0" x2="0" y2="1" gradientTransform="rotate(-45 0.5 0.5)">
-      <stop offset="0" stop-color="#ffab2e"/>
-      <stop offset="1" stop-color="#f07400"/>
-    </linearGradient>
-    <mask id="hm" maskUnits="userSpaceOnUse" x="-101" y="-101" width="202" height="202">
-      <rect x="-101" y="-101" width="202" height="202" fill="#fff"/><rect x="13.5" y="-43" width="29" height="30" fill="#000"/><rect x="-42.5" y="13" width="29" height="30" fill="#000"/>
-    </mask>
-    <mask id="vm" maskUnits="userSpaceOnUse" x="-101" y="-101" width="202" height="202">
-      <rect x="-101" y="-101" width="202" height="202" fill="#fff"/><rect x="-43" y="-42.5" width="30" height="29" fill="#000"/><rect x="13" y="13.5" width="30" height="29" fill="#000"/>
-    </mask>
   </defs>
-  <rect width="256" height="256" rx="52" fill="url(#bg)"/>
-  <g transform="translate(128 128) rotate(45)">
-    <g stroke="#e07a10" stroke-width="15" stroke-linecap="butt" fill="none">
-      <g mask="url(#hm)"><line x1="-80" y1="-28" x2="80" y2="-28"/><line x1="-80" y1="28" x2="80" y2="28"/></g>
-      <g mask="url(#vm)"><line x1="-28" y1="-80" x2="-28" y2="80"/><line x1="28" y1="-80" x2="28" y2="80"/></g>
-    </g>
-    <g fill="url(#node)"><circle cx="-80" cy="-28" r="17"/><circle cx="80" cy="-28" r="17"/><circle cx="-28" cy="-80" r="17"/><circle cx="-28" cy="80" r="17"/><circle cx="-80" cy="28" r="17"/><circle cx="80" cy="28" r="17"/><circle cx="28" cy="-80" r="17"/><circle cx="28" cy="80" r="17"/></g>
-    <circle r="12" fill="#fff1dc"/>
-  </g>
+  <polygon points="128,44.8 215.5,108.37 182.08,211.23 73.92,211.23 40.5,108.37" fill="none" stroke="#e07a10" stroke-width="17" stroke-linejoin="round"/>
+  <g fill="url(#node)"><circle cx="128" cy="44.8" r="34"/><circle cx="215.5" cy="108.37" r="34"/><circle cx="182.08" cy="211.23" r="34"/><circle cx="73.92" cy="211.23" r="34"/><circle cx="40.5" cy="108.37" r="34"/></g>
 </svg>
