@@ -332,12 +332,30 @@ export class ClustersTreeProvider implements vscode.TreeDataProvider<ClusterTree
 	}
 
 	private redrawTimer: ReturnType<typeof setTimeout> | undefined;
+	private visible = true;
+	/** A redraw was requested while the view was hidden; it runs when the view is shown. */
+	private stale = false;
+
+	/** Follows the view's visibility. While hidden, redraws (and so gateway calls) wait until it is shown again. */
+	setVisible(visible: boolean): void {
+		this.visible = visible;
+		if (visible && this.stale) this.scheduleRedraw();
+	}
 
 	/** Coalesces bursts of store changes (one per probed cluster) into one redraw. */
 	private scheduleRedraw(): void {
+		if (!this.visible) {
+			this.stale = true;
+			return;
+		}
 		if (this.redrawTimer) return;
 		this.redrawTimer = setTimeout(() => {
 			this.redrawTimer = undefined;
+			if (!this.visible) {
+				this.stale = true;
+				return;
+			}
+			this.stale = false;
 			this.emitter.fire(undefined);
 		}, REDRAW_DEBOUNCE_MS);
 	}
@@ -350,7 +368,7 @@ export class ClustersTreeProvider implements vscode.TreeDataProvider<ClusterTree
 	async setFilter(filter: ClusterTreeFilter): Promise<void> {
 		this.filter = { ...filter };
 		await this.state?.update(FILTER_STATE_KEY, this.filter);
-		this.emitter.fire(undefined);
+		this.scheduleRedraw();
 	}
 
 	/** Pending Applications-group refreshes, one per connection. */
@@ -373,7 +391,8 @@ export class ClustersTreeProvider implements vscode.TreeDataProvider<ClusterTree
 
 	/** Re-fetches `element` and its descendants, or the whole tree when omitted. */
 	refresh(element?: ClusterTreeItem): void {
-		if (!element) return this.scheduleRedraw();
+		// Hidden: the redraw on show reloads everything, this branch included.
+		if (!element || !this.visible) return this.scheduleRedraw();
 		if (element.kind !== 'cluster') element.children = undefined;
 		this.emitter.fire(element);
 	}

@@ -93,6 +93,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		treeDataProvider: clustersTree,
 	});
 	context.subscriptions.push(clustersView);
+	clustersTree.setVisible(clustersView.visible);
+	context.subscriptions.push(clustersView.onDidChangeVisibility((e) => clustersTree.setVisible(e.visible)));
 	// Mirror the filter into context keys (drives the Filter menu) and the view description.
 	const publishClusterFilter = (): void => {
 		const filter = clustersTree.getFilter();

@@ -48,10 +48,11 @@ export class ClustersAutoRefresh implements vscode.Disposable {
 		if (connections.length === 0) return;
 		this.running = true;
 		try {
-			// Background probes save (and redraw) only when the cluster's state changed.
+			// Entity states below a cluster aren't in the probe, so reload the expanded rows. This shares one
+			// redraw with a pending one (e.g. changes made while the view was hidden).
+			if (connections.some((c) => c.connected)) this.tree.refresh();
+			// Background probes save, and redraw again, only when a cluster's state changed.
 			await Promise.all(connections.map((c) => this.local.refresh(c, { background: true })));
-			// Entity states below a cluster aren't in the probe, so reload the expanded rows.
-			if (this.store.list().some((c) => c.connected)) this.tree.refresh();
 		} finally {
 			this.running = false;
 		}
