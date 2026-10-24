@@ -46,8 +46,15 @@
         "grammars": [
             {
                 "language": "sfproj",
-                "scopeName": "text.xml",
-                "path": "./syntaxes/xml.tmLanguage.json"
+                "scopeName": "text.xml.sfproj",
+                "path": "./syntaxes/sfproj.tmLanguage.json"
+            },
+            {
+                "scopeName": "msbuild.injection.sfproj",
+                "path": "./syntaxes/sfproj.msbuild.injection.json",
+                "injectTo": [
+                    "text.xml.sfproj"
+                ]
             }
         ],
         "viewsContainers": {

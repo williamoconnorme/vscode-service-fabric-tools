@@ -1,0 +1,40 @@
+{
+    "scopeName": "msbuild.injection.sfproj",
+    "injectionSelector": "L:text.xml.sfproj -comment",
+    "patterns": [
+        { "include": "#property" },
+        { "include": "#item" },
+        { "include": "#metadata" }
+    ],
+    "repository": {
+        "property": {
+            "begin": "(\\$\\()",
+            "end": "(\\))",
+            "beginCaptures": { "1": { "name": "punctuation.definition.variable.begin.msbuild" } },
+            "endCaptures": { "1": { "name": "punctuation.definition.variable.end.msbuild" } },
+            "contentName": "variable.other.property.msbuild",
+            "patterns": [
+                { "include": "#property" },
+                { "match": "\\[[^\\]]*\\]::\\w+", "name": "support.function.msbuild" }
+            ]
+        },
+        "item": {
+            "match": "(@\\()([\\w.-]+)(?:(->)('[^']*'))?(\\))",
+            "captures": {
+                "1": { "name": "punctuation.definition.variable.begin.msbuild" },
+                "2": { "name": "entity.name.type.item.msbuild" },
+                "3": { "name": "keyword.operator.transform.msbuild" },
+                "4": { "name": "string.quoted.single.msbuild" },
+                "5": { "name": "punctuation.definition.variable.end.msbuild" }
+            }
+        },
+        "metadata": {
+            "match": "(%\\()([\\w.-]+)(\\))",
+            "captures": {
+                "1": { "name": "punctuation.definition.variable.begin.msbuild" },
+                "2": { "name": "variable.other.metadata.msbuild" },
+                "3": { "name": "punctuation.definition.variable.end.msbuild" }
+            }
+        }
+    }
+}
