@@ -312,6 +312,24 @@ export class ClustersTreeProvider implements vscode.TreeDataProvider<ClusterTree
 		this.emitter.fire(undefined);
 	}
 
+	/** Pending Applications-group refreshes, one per connection. */
+	private readonly busyTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+	/** While an application is upgrading, creating or deleting, refreshes its group every few seconds so the row stays current. */
+	private refreshWhileBusy(conn: ClusterConnection, group: ClusterTreeItem, items: ClusterTreeItem[]): void {
+		const pending = this.busyTimers.get(conn.id);
+		if (pending) clearTimeout(pending);
+		this.busyTimers.delete(conn.id);
+		if (!items.some(isBusyApp)) return;
+		this.busyTimers.set(
+			conn.id,
+			setTimeout(() => {
+				this.busyTimers.delete(conn.id);
+				if (this.store.get(conn.id)) this.refresh(group);
+			}, BUSY_APP_REFRESH_MS),
+		);
+	}
+
 	/** Re-fetches `element` and its descendants, or the whole tree when omitted. */
 	refresh(element?: ClusterTreeItem): void {
 		if (element && element.kind !== 'cluster') element.children = undefined;
@@ -396,9 +414,13 @@ export class ClustersTreeProvider implements vscode.TreeDataProvider<ClusterTree
 			settle(client.getServices('System', TREE_TIMEOUT_MS)),
 			settle(client.getRepairTasks(TREE_TIMEOUT_MS)),
 		]);
+		const appItems = apps.ok ? apps.value.map((a) => appItem(conn, a)) : [];
+		await addUpgradeProgress(appItems, client);
+		const appsGroup = groupItem(conn, 'apps', 'Applications', apps, () => appItems, 'No deployed applications');
+		this.refreshWhileBusy(conn, appsGroup, appItems);
 		return [
 			groupItem(conn, 'appTypes', 'Application Types', appTypes, (types) => appTypeItems(conn, types), 'No application types provisioned'),
-			groupItem(conn, 'apps', 'Applications', apps, (items) => items.map((a) => appItem(conn, a)), 'No deployed applications'),
+			appsGroup,
 			groupItem(conn, 'nodes', 'Nodes', nodes, (items) => items.map((n) => nodeItem(conn, n)), 'No nodes reported'),
 			groupItem(
 				conn,
@@ -432,11 +454,12 @@ export class ClustersTreeProvider implements vscode.TreeDataProvider<ClusterTree
 				);
 			case 'appTypes':
 				return orEmpty(appTypeItems(conn, await client.getApplicationTypes(TREE_TIMEOUT_MS)), 'No application types provisioned');
-			case 'apps':
-				return orEmpty(
-					(await client.getApplications(TREE_TIMEOUT_MS)).map((a) => appItem(conn, a)),
-					'No deployed applications',
-				);
+			case 'apps': {
+				const items = (await client.getApplications(TREE_TIMEOUT_MS)).map((a) => appItem(conn, a));
+				await addUpgradeProgress(items, client);
+				this.refreshWhileBusy(conn, element, items);
+				return orEmpty(items, 'No deployed applications');
+			}
 			case 'nodes':
 				return orEmpty(
 					(await client.getNodes(TREE_TIMEOUT_MS)).map((n) => nodeItem(conn, n)),
@@ -561,6 +584,54 @@ function appTypeItems(conn: ClusterConnection, types: ApplicationTypeInfo[]): Cl
 		});
 }
 
+/** Spinning icons for applications the cluster is working on. */
+const BUSY_APP_ICONS: Record<string, string> = { Upgrading: 'sync~spin', Creating: 'loading~spin', Deleting: 'loading~spin' };
+
+/** How often the Applications group refreshes while an application is upgrading, creating or deleting. */
+const BUSY_APP_REFRESH_MS = 10000;
+
+const UPGRADE_STATES: Record<string, string> = {
+	RollingForwardInProgress: 'Upgrading',
+	RollingForwardPending: 'Waiting to start the next upgrade domain',
+	RollingBackInProgress: 'Rolling back',
+	RollingBackCompleted: 'Rolled back',
+	RollingForwardCompleted: 'Upgrade completed',
+	Failed: 'Upgrade failed',
+};
+
+function isBusyApp(item: ClusterTreeItem): boolean {
+	const status = (item.entity.raw as ApplicationInfo | undefined)?.status;
+	return item.kind === 'app' && status !== undefined && status in BUSY_APP_ICONS;
+}
+
+/** Adds the target version, upgrade state and current upgrade domain to upgrading application rows. */
+async function addUpgradeProgress(items: ClusterTreeItem[], client: SfRestClient): Promise<void> {
+	await Promise.all(
+		items.map(async (item) => {
+			const app = item.entity.raw as ApplicationInfo | undefined;
+			if (item.kind !== 'app' || app?.status !== 'Upgrading') return;
+			const progress = await client.getApplicationUpgradeProgress(app.id, TREE_TIMEOUT_MS).catch(() => undefined);
+			if (!progress) return;
+			const target = String(progress.TargetApplicationTypeVersion ?? '');
+			const rawState = String(progress.UpgradeState ?? '');
+			const state = UPGRADE_STATES[rawState] ?? (rawState || 'Upgrading');
+			const domain = progress.CurrentUpgradeDomainProgress?.DomainName as string | undefined;
+			const mode = progress.RollingUpgradeMode as string | undefined;
+			const version = target && target !== app.typeVersion ? `${app.typeVersion} → ${target}` : app.typeVersion;
+			item.description = [`${app.typeName} ${version}`, state, domain ? `UD ${domain}` : ''].filter(Boolean).join(' • ');
+			item.tooltip = [
+				item.tooltip,
+				`Upgrade: ${state}${mode ? ` (${mode})` : ''}`,
+				target ? `Target version: ${target}` : '',
+				domain ? `Current upgrade domain: ${domain}` : '',
+			]
+				.filter(Boolean)
+				.join('\n');
+			if (rawState === 'RollingBackInProgress') item.iconPath = new vscode.ThemeIcon('sync~spin', new vscode.ThemeColor('charts.orange'));
+		}),
+	);
+}
+
 function appItem(conn: ClusterConnection, app: ApplicationInfo): ClusterTreeItem {
 	const item = new ClusterTreeItem('app', app.name, vscode.TreeItemCollapsibleState.Collapsed, conn, undefined, {
 		appName: app.name,
@@ -569,7 +640,9 @@ function appItem(conn: ClusterConnection, app: ApplicationInfo): ClusterTreeItem
 		typeVersion: app.typeVersion,
 		raw: app,
 	}).withHealth(app.healthState);
-	item.description = `${app.typeName} v${app.typeVersion} • ${app.status}${app.healthState ? ` • ${app.healthState}` : ''}`;
+	const busyIcon = BUSY_APP_ICONS[app.status];
+	if (busyIcon) item.iconPath = new vscode.ThemeIcon(busyIcon, healthColor(app.healthState));
+	item.description = `${app.typeName} ${app.typeVersion} • ${app.status}`;
 	item.tooltip = [
 		`fabric:/${app.name}`,
 		`Type: ${app.typeName} ${app.typeVersion}`,
@@ -595,7 +668,7 @@ function serviceItem(conn: ClusterConnection, svc: ServiceInfo, parent: ClusterE
 	item.description = `${svc.kind} • ${svc.status}${svc.healthState ? ` • ${svc.healthState}` : ''}`;
 	item.tooltip = [
 		svc.name,
-		`Type: ${svc.typeName}${svc.manifestVersion ? ` v${svc.manifestVersion}` : ''}`,
+		`Type: ${svc.typeName}${svc.manifestVersion ? ` ${svc.manifestVersion}` : ''}`,
 		`Kind: ${svc.kind}${svc.kind === 'Stateful' ? (svc.hasPersistedState ? ' (persisted)' : ' (volatile)') : ''}`,
 		`Status: ${svc.status}`,
 		`Health: ${svc.healthState || 'Unknown'}`,
@@ -671,7 +744,7 @@ function deployedAppItem(conn: ClusterConnection, a: DeployedApplicationOnNodeIn
 		typeName: a.typeName,
 		raw: a,
 	}).withHealth(a.healthState);
-	item.description = `${a.typeName} • ${a.status}${a.healthState ? ` • ${a.healthState}` : ''}`;
+	item.description = `${a.typeName} • ${a.status}`;
 	item.tooltip = [
 		`fabric:/${a.name} on ${parent.nodeName}`,
 		`Type: ${a.typeName}`,
@@ -692,9 +765,9 @@ function deployedServicePackageItem(conn: ClusterConnection, p: DeployedServiceP
 		servicePackageActivationId: p.servicePackageActivationId,
 		raw: p,
 	}).withHealth(p.healthState);
-	item.description = `v${p.version} • ${p.status}${p.healthState ? ` • ${p.healthState}` : ''}`;
+	item.description = `${p.version} • ${p.status}${p.healthState ? ` • ${p.healthState}` : ''}`;
 	item.tooltip = [
-		`Service package ${p.name} v${p.version}`,
+		`Service package ${p.name} ${p.version}`,
 		`Status: ${p.status}`,
 		`Health: ${p.healthState || 'Unknown'}`,
 		p.servicePackageActivationId ? `Activation: ${p.servicePackageActivationId}` : 'Activation: SharedProcess',
@@ -712,11 +785,11 @@ function codePackageItem(conn: ClusterConnection, cp: DeployedCodePackageDetail,
 		processId: cp.processId,
 		raw: cp.raw,
 	});
-	item.description = [`v${cp.codePackageVersion}`, cp.entryPointStatus || cp.status, cp.processId ? `pid ${cp.processId}` : '', cp.hostType]
+	item.description = [cp.codePackageVersion, cp.entryPointStatus || cp.status, cp.processId ? `pid ${cp.processId}` : '', cp.hostType]
 		.filter(Boolean)
 		.join(' • ');
 	item.tooltip = [
-		`Code package ${cp.codePackageName} v${cp.codePackageVersion}`,
+		`Code package ${cp.codePackageName} ${cp.codePackageVersion}`,
 		`Status: ${cp.status}`,
 		`Entry point: ${cp.entryPointStatus || 'Unknown'}${cp.processId ? ` (pid ${cp.processId})` : ''}`,
 		cp.setupEntryPointStatus ? `Setup entry point: ${cp.setupEntryPointStatus}` : '',
