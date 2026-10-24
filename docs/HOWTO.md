@@ -61,6 +61,8 @@ After activation:
 
 > Tip: **Service Fabric: Get Started** opens the in-product walkthrough, which mirrors the first half of this guide.
 
+**Restricted Mode.** In a workspace you haven't trusted, the views, manifest IntelliSense, validation, outline, references and rename all work, but **Build**, **Rebuild**, **Clean**, **Package**, **Restore**, **Publish**, **Remove**, **Build and Push Container Images**, **Create New Application**, **Add Service** and **Add Library** are disabled: they run MSBuild, NuGet and the project's PowerShell scripts, which can execute code from the repository. Running one anyway offers **Manage Workspace Trust**. The settings `serviceFabric.msbuildPath`, `nugetPath`, `sdkPath`, `deploy.useMsbuildPropertyEvaluator` and `clientCertificates` are only read from your user settings until the workspace is trusted.
+
 ---
 
 ## 3. Tour: the Service Fabric activity-bar view
@@ -186,11 +188,25 @@ Disable the in-house pass with `serviceFabric.diagnostics.enableManifestRules: f
 
 ### 4.3 Go to definition (F12)
 
-Place the caret on a `[Parameter]` reference (e.g. `"[MyService_InstanceCount]"`) and press **F12** — the editor jumps to the `<Parameter Name="MyService_InstanceCount" …/>` declaration in the application manifest, even when split across files.
+Place the caret on a `[Parameter]` reference (e.g. `"[MyService_InstanceCount]"`) and press **F12** — the editor jumps to the `<Parameter Name="MyService_InstanceCount" …/>` declaration in the application manifest, even from a parameter file. F12 on a `ServiceTypeName` in `ApplicationManifest.xml` or `StartupServices.xml` goes to the service type in `ServiceManifest.xml`, and on a `ServiceManifestName` to that `ServiceManifest.xml`.
+
+### 4.3.1 Outline, references and rename
+
+- **Outline / breadcrumbs / Go to Symbol (Ctrl+Shift+O).** Manifests, `StartupServices.xml`, parameter files and publish profiles show their elements by name (`Web_InstanceCount`, `WebPkg`, `WebType`, …).
+- **Find All References (Shift+F12)** and **Rename (F2)** work on:
+  - **Application parameters:** the `<Parameters>` declaration, every `[Name]` reference in the manifests, and `<Parameter Name>` in every `ApplicationParameters/*.xml`.
+  - **Service type names:** `ServiceTypeName` in `ServiceManifest.xml`, `ApplicationManifest.xml` and `StartupServices.xml`, plus the same string literal (`"WebType"`) in the service projects' C# code, where `ServiceRuntime.RegisterServiceAsync` registers it.
+  - **Service package names:** `<ServiceManifest Name>` and `ServiceManifestRef ServiceManifestName`. The package folder isn't renamed.
+
+  Rename shows every edit in the refactor preview (Shift+Enter) before applying.
 
 ### 4.4 Code actions
 
 - **Promote literal to parameter** — Hover a literal value (e.g. `InstanceCount="3"`) and apply the lightbulb action. The extension adds a `<Parameter>` to the manifest and rewrites the literal as `[MyService_InstanceCount]`.
+
+### 4.4.1 Cluster health in the Problems panel
+
+While the active cluster is connected, its unhealthy applications and services appear in **Problems** on the files they come from: an application of this manifest's type on `ApplicationTypeName` in `ApplicationManifest.xml` (`SFH001`), a service on its `ServiceTypeName` in `ServiceManifest.xml` (`SFH002`). `Warning` health is a warning, `Error` an error; the message includes the cluster's first unhealthy evaluation. The code links to the entity in Service Fabric Explorer, and the lightbulb offers **Show health** and **Open in Service Fabric Explorer**. Problems update when the cluster's state changes and every minute while the window is focused. Turn this off with `serviceFabric.diagnostics.showClusterHealth: false`.
 
 ---
 

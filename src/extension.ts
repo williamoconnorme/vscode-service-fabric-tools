@@ -22,6 +22,9 @@ import { SchemaLanguageFeatures } from './language/schema/schemaLanguageFeatures
 import { ManifestDiagnostics } from './language/manifestDiagnostics';
 import { ManifestDefinitionProvider } from './language/manifestDefinitionProvider';
 import { ManifestCodeActionProvider } from './language/manifestCodeActions';
+import { ManifestSymbolProvider } from './language/manifestSymbols';
+import { ManifestReferenceProvider } from './language/manifestReferences';
+import { ClusterHealthProblems } from './language/clusterHealthProblems';
 import { ServiceFabricTaskProvider } from './build/sfTaskProvider';
 import { resolveTargetProject, runBuildTarget } from './commands/buildCommands';
 import { ensureNugetRestored } from './build/nugetRestore';
@@ -63,6 +66,13 @@ type CommandHandler = (...args: any[]) => unknown;
 const MANIFEST_SELECTOR: vscode.DocumentFilter[] = [
 	{ language: 'xml', scheme: 'file', pattern: '**/ApplicationManifest.xml' },
 	{ language: 'xml', scheme: 'file', pattern: '**/ServiceManifest.xml' },
+];
+
+/** Every Service Fabric XML file: manifests, StartupServices.xml, parameter files and publish profiles. */
+const SF_XML_SELECTOR: vscode.DocumentFilter[] = [
+	...MANIFEST_SELECTOR,
+	{ language: 'xml', scheme: 'file', pattern: '**/StartupServices.xml' },
+	{ language: 'xml', scheme: 'file', pattern: '**/{ApplicationParameters,PublishProfiles,StartupServiceParameters}/*.xml' },
 ];
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -176,6 +186,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			providedCodeActionKinds: ManifestCodeActionProvider.providedCodeActionKinds,
 		}),
 	);
+	const manifestReferences = new ManifestReferenceProvider(projects);
+	context.subscriptions.push(
+		vscode.languages.registerDocumentSymbolProvider(SF_XML_SELECTOR, new ManifestSymbolProvider(), { label: 'Service Fabric' }),
+		vscode.languages.registerReferenceProvider(SF_XML_SELECTOR, manifestReferences),
+		vscode.languages.registerRenameProvider(SF_XML_SELECTOR, manifestReferences),
+		vscode.languages.registerDefinitionProvider(SF_XML_SELECTOR, manifestReferences),
+	);
+	context.subscriptions.push(new ClusterHealthProblems(connections, projects, logger));
 	context.subscriptions.push(vscode.tasks.registerTaskProvider(ServiceFabricTaskProvider.type, new ServiceFabricTaskProvider(projects)));
 	context.subscriptions.push(
 		vscode.workspace.onDidChangeConfiguration((e) => {
@@ -384,13 +402,37 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			},
 		],
 	];
-	for (const [id, handler] of commands) context.subscriptions.push(vscode.commands.registerCommand(id, handler));
+	for (const [id, handler] of commands) {
+		const guarded = TRUSTED_COMMANDS.has(id) ? requireWorkspaceTrust(handler) : handler;
+		context.subscriptions.push(vscode.commands.registerCommand(id, guarded));
+	}
 
 	logger.info(`Found ${projects.getProjects().length} Service Fabric project(s) in this workspace.`);
 	manifestDiagnostics.refreshAll();
 }
 
 export function deactivate(): void {}
+
+/**
+ * Commands that run MSBuild, NuGet or the project's scripts. package.json disables them in
+ * Restricted Mode (`enablement: isWorkspaceTrusted`); this also covers `executeCommand` callers.
+ */
+const TRUSTED_COMMANDS = new Set(
+	['build', 'rebuild', 'clean', 'package', 'restore', 'publish', 'remove', 'containers.buildAndPush', 'createApplication', 'addService', 'addLibrary'].map(
+		(c) => `serviceFabric.${c}`,
+	),
+);
+
+function requireWorkspaceTrust(handler: CommandHandler): CommandHandler {
+	return async (...args) => {
+		if (vscode.workspace.isTrusted) return handler(...args);
+		const choice = await vscode.window.showWarningMessage(
+			'This workspace is in Restricted Mode. Building, publishing and scaffolding run MSBuild, NuGet and project scripts, so they need a trusted workspace.',
+			'Manage Workspace Trust',
+		);
+		if (choice) await vscode.commands.executeCommand('workbench.trust.manage');
+	};
+}
 
 /**
  * Normalizes a scaffold-command argument: an Explorer `Uri` becomes `{ resource }`,

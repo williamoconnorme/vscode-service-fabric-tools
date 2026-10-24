@@ -33,6 +33,23 @@
         "workspaceContains:**/*.sfproj",
         "onCommand:serviceFabric.createApplication"
     ],
+    "capabilities": {
+        "untrustedWorkspaces": {
+            "supported": "limited",
+            "description": "In Restricted Mode the Applications and Clusters views, manifest IntelliSense and validation work, but building, restoring, packaging, publishing, removing, building container images and scaffolding are disabled because they run MSBuild, NuGet and the project's PowerShell scripts.",
+            "restrictedConfigurations": [
+                "serviceFabric.msbuildPath",
+                "serviceFabric.nugetPath",
+                "serviceFabric.sdkPath",
+                "serviceFabric.deploy.useMsbuildPropertyEvaluator",
+                "serviceFabric.clientCertificates"
+            ]
+        },
+        "virtualWorkspaces": {
+            "supported": false,
+            "description": "Builds and the project watcher need the files on disk."
+        }
+    },
     "contributes": {
         "icons": {
             "service-fabric": {
@@ -148,40 +165,47 @@
                 "command": "serviceFabric.build",
                 "title": "Build",
                 "category": "Service Fabric",
-                "icon": "$(tools)"
+                "icon": "$(tools)",
+                "enablement": "isWorkspaceTrusted"
             },
             {
                 "command": "serviceFabric.rebuild",
                 "title": "Rebuild",
-                "category": "Service Fabric"
+                "category": "Service Fabric",
+                "enablement": "isWorkspaceTrusted"
             },
             {
                 "command": "serviceFabric.clean",
                 "title": "Clean",
-                "category": "Service Fabric"
+                "category": "Service Fabric",
+                "enablement": "isWorkspaceTrusted"
             },
             {
                 "command": "serviceFabric.package",
                 "title": "Package Application",
                 "category": "Service Fabric",
-                "icon": "$(package)"
+                "icon": "$(package)",
+                "enablement": "isWorkspaceTrusted"
             },
             {
                 "command": "serviceFabric.restore",
                 "title": "Restore NuGet Packages",
                 "category": "Service Fabric",
-                "icon": "$(cloud-download)"
+                "icon": "$(cloud-download)",
+                "enablement": "isWorkspaceTrusted"
             },
             {
                 "command": "serviceFabric.publish",
                 "title": "Publish Application…",
                 "category": "Service Fabric",
-                "icon": "$(rocket)"
+                "icon": "$(rocket)",
+                "enablement": "isWorkspaceTrusted"
             },
             {
                 "command": "serviceFabric.remove",
                 "title": "Remove Application",
-                "category": "Service Fabric"
+                "category": "Service Fabric",
+                "enablement": "isWorkspaceTrusted"
             },
             {
                 "command": "serviceFabric.cluster.add",
@@ -225,7 +249,8 @@
             {
                 "command": "serviceFabric.containers.buildAndPush",
                 "title": "Build and Push Container Images…",
-                "category": "Service Fabric"
+                "category": "Service Fabric",
+                "enablement": "isWorkspaceTrusted"
             },
             {
                 "command": "serviceFabric.encryptSecret",
@@ -272,12 +297,14 @@
                 "command": "serviceFabric.createApplication",
                 "title": "Create New Application…",
                 "category": "Service Fabric",
-                "icon": "$(add)"
+                "icon": "$(add)",
+                "enablement": "isWorkspaceTrusted"
             },
             {
                 "command": "serviceFabric.addService",
                 "title": "Add New Service…",
-                "category": "Service Fabric"
+                "category": "Service Fabric",
+                "enablement": "isWorkspaceTrusted"
             },
             {
                 "command": "serviceFabric.removeService",
@@ -287,7 +314,8 @@
             {
                 "command": "serviceFabric.addLibrary",
                 "title": "Add Library Project…",
-                "category": "Service Fabric"
+                "category": "Service Fabric",
+                "enablement": "isWorkspaceTrusted"
             },
             {
                 "command": "serviceFabric.removeLibrary",
@@ -1260,6 +1288,11 @@
                     "type": "boolean",
                     "default": true,
                     "description": "Prompt before Remove / Reset Local Cluster operations."
+                },
+                "serviceFabric.diagnostics.showClusterHealth": {
+                    "type": "boolean",
+                    "default": true,
+                    "markdownDescription": "Show unhealthy applications and services of the active cluster in the **Problems** panel, on the `ApplicationManifest.xml` / `ServiceManifest.xml` they come from. Re-checked every minute while the window is focused."
                 },
                 "serviceFabric.clusters.autoRefreshSeconds": {
                     "type": "number",
