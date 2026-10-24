@@ -34,6 +34,15 @@
         "onCommand:serviceFabric.createApplication"
     ],
     "contributes": {
+        "icons": {
+            "service-fabric": {
+                "description": "Service Fabric",
+                "default": {
+                    "fontPath": "media/sf-icons.woff",
+                    "fontCharacter": "\\E001"
+                }
+            }
+        },
         "languages": [
             {
                 "id": "sfproj",
@@ -1485,7 +1494,8 @@
         "schema": "node scripts/generate-schema.mjs",
         "format": "prettier --write \"src/**/*.ts\"",
         "package": "node -e \"require('fs').mkdirSync('artifacts',{recursive:true})\" && vsce package --no-dependencies --out artifacts/",
-        "icons": "node scripts/generate-icons.js"
+        "icons": "node scripts/generate-icons.js",
+        "icon-font": "node scripts/generate-icon-font.mjs"
     },
     "devDependencies": {
         "@resvg/resvg-js": "^2.6.2",
@@ -1494,6 +1504,8 @@
         "@vscode/vsce": "^3.9.1",
         "esbuild": "^0.24.0",
         "prettier": "^3.3.3",
+        "svg2ttf": "^6.0.3",
+        "ttf2woff": "^3.0.0",
         "typescript": "^5.6.3"
     },
     "dependencies": {

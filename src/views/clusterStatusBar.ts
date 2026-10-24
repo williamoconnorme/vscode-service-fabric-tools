@@ -31,11 +31,12 @@ export class ClusterStatusBar implements vscode.Disposable {
 			this.item.hide();
 			return;
 		}
-		const icon = active.connected ? '$(pass-filled)' : '$(circle-slash)';
+		// $(service-fabric) is contributed by the extension (media/sf-icons.woff).
+		const icon = active.connected ? '$(service-fabric)' : '$(circle-slash)';
 		const nodeCount = active.nodes?.length ?? 0;
 		const mode = active.connected ? (nodeCount === 1 ? '1-node' : nodeCount === 5 ? '5-node' : nodeCount ? `${nodeCount}-node` : '') : '';
 		const suffix = mode ? ` (${mode})` : '';
-		this.item.text = `${icon} SF: ${active.label}${suffix}`;
+		this.item.text = `${icon} ${active.label}${suffix}`;
 		const tooltip = [active.endpoint];
 		if (active.connected) {
 			tooltip.push(`Health: ${active.aggregatedHealthState ?? 'Unknown'}`);

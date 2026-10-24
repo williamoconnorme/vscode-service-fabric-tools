@@ -149,7 +149,7 @@ Right-click menus follow the entity:
 
 ### 3.3 Status bar
 
-The right-aligned status-bar item shows the active cluster, its node count (e.g. `1-node`/`5-node`), and a coloured health glyph. Click it to switch the active cluster.
+Once a cluster is added, the status bar shows the active cluster with the Service Fabric icon (or a disconnected icon) and its node count (e.g. `1-node`/`5-node`). Hover for its health, nodes and applications; click it to switch the active cluster.
 
 ---
 
