@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.0
 
 - **Service Fabric icons for the Applications and Clusters views.** They replace the generic box and server icons, so a view moved out of the Service Fabric sidebar (to the panel, the secondary sidebar or its own activity-bar slot) still looks like Service Fabric.
 - **Seed nodes are marked in the Clusters view**: their node icon carries the seed from Service Fabric Explorer (coloured by health like other nodes), and the tooltip says "(seed node)".
