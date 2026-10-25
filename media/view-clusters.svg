@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <defs>
+    <mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24">
+      <rect width="24" height="24" fill="#fff"/>
+      <rect x="14" y="14" width="12" height="12" rx="2" fill="#000"/>
+    </mask>
+    <!-- status lights punched out of the server units -->
+    <mask id="lights" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24">
+      <rect width="24" height="24" fill="#fff"/>
+      <circle cx="17" cy="17" r="0.8" fill="#000"/>
+      <circle cx="17" cy="21.7" r="0.8" fill="#000"/>
+    </mask>
+  </defs>
+  <g mask="url(#cut)">
+    <polygon points="12,5.03 19.323,10.351 16.526,18.959 7.474,18.959 4.677,10.351" fill="none" stroke="#c5c5c5" stroke-width="1.6" stroke-linejoin="round"/>
+    <g fill="#c5c5c5"><circle cx="12" cy="5.03" r="3.2"/><circle cx="19.323" cy="10.351" r="3.2"/><circle cx="16.526" cy="18.959" r="3.2"/><circle cx="7.474" cy="18.959" r="3.2"/><circle cx="4.677" cy="10.351" r="3.2"/></g>
+  </g>
+  <!-- clusters: a stack of two server units -->
+  <g fill="#c5c5c5" mask="url(#lights)"><rect x="15.2" y="15.2" width="8.3" height="3.6" rx="0.8"/><rect x="15.2" y="19.9" width="8.3" height="3.6" rx="0.8"/></g>
+</svg>

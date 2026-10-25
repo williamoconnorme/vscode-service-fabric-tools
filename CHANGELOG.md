@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Service Fabric icons for the Applications and Clusters views.** They replace the generic box and server icons, so a view moved out of the Service Fabric sidebar (to the panel, the secondary sidebar or its own activity-bar slot) still looks like Service Fabric.
+- **Seed nodes are marked in the Clusters view**: their node icon carries the seed from Service Fabric Explorer (coloured by health like other nodes), and the tooltip says "(seed node)".
+- **Node rows in the Clusters view no longer show status and health beside the name**; they're in the tooltip, and health still colours the icon.
+
 ## 1.3.1
 
 - **Saved clusters are shared by all workspaces.** Add a cluster once and it's in every folder's Clusters view; with Settings Sync on it also reaches your other machines (setting **`serviceFabric.clusters.syncSavedClusters`**; passphrases never sync). Each workspace keeps its own active cluster (new ones start with the last used), Disconnect state and probe results. Clusters saved per workspace by 1.3.0 and earlier move into the shared list automatically.

@@ -1,6 +1,7 @@
 // Builds media/sf-icons.woff: an icon font with the Service Fabric mark
 // (the activity-bar icon) so it can be used as $(service-fabric) in the
-// status bar. Font glyphs must be filled, so the pentagon's stroked edges are
+// status bar, and the seed-node glyph used as $(service-fabric-seed-node) in the
+// Clusters view. Font glyphs must be filled, so the pentagon's stroked edges are
 // turned into thin bars and the nodes into filled circles.
 // Usage: npm run icon-font
 import { writeFileSync } from 'node:fs';
@@ -9,6 +10,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const svg2ttf = require('svg2ttf');
 const ttf2woff = require('ttf2woff');
+const svgpath = require('svgpath');
 
 // Geometry of media/activitybar.svg (24×24 view box).
 const VERTICES = [
@@ -70,6 +72,34 @@ const glyph = [
 	...VERTICES.map((v) => circle(pt(v), NODE_R * scale)),
 ].join('');
 
+// Seed-node icon from Service Fabric Explorer (src/SfxWeb/src/assets/seed.svg,
+// MIT License, Copyright (c) Microsoft Corporation), 24×24 view box.
+const SEED =
+	'M22 7v2.5c0 3.59-2.91 6.5-6.5 6.5H13v5h-2v-7l.019-1c.255-3.356 3.06-6 6.481-6H22zM6 3c3.092 0 5.716 2.005 6.643 4.786-1.5 1.275-2.49 3.128-2.627 5.214H9c-3.866 0-7-3.134-7-7V3h4z';
+// The codicon `vm` (CC BY 4.0, Microsoft Corporation) in its 16×16 view box,
+// redrawn with its bottom-right corner cut away (x ≥ 8, y ≥ 7) to make room
+// for the seed: the screen's outline as one C-shaped contour, the left post of
+// the stand, and the left half of the foot.
+const VM_CUT = [
+	'M3 1H13A2 2 0 0 1 15 3V7H14V3A1 1 0 0 0 13 2H3A1 1 0 0 0 2 3V10A1 1 0 0 0 3 11H8V12H3A2 2 0 0 1 1 10V3A2 2 0 0 1 3 1Z',
+	'M5 12H6V14H5Z',
+	'M3.5 14H8V15H3.5A0.5 0.5 0 0 1 3.5 14Z',
+].join('');
+// A seed node: the vm icon with the seed in the cut-away corner (seed box
+// x 2..22, y 3..21 scaled to 7.5 wide at x 8.5, y 8.25).
+const SEED_K = 7.5 / 20;
+const seedNode =
+	svgpath(VM_CUT).scale(EM / 16, -EM / 16).translate(0, EM).abs().round(2).toString() +
+	svgpath(SEED)
+		.translate(-2, -3)
+		.scale(SEED_K)
+		.translate(8.5, 8.25)
+		.scale(EM / 16, -EM / 16)
+		.translate(0, EM)
+		.abs()
+		.round(2)
+		.toString();
+
 const svgFont = `<?xml version="1.0" standalone="no"?>
 <svg xmlns="http://www.w3.org/2000/svg">
 <defs>
@@ -77,6 +107,7 @@ const svgFont = `<?xml version="1.0" standalone="no"?>
 <font-face font-family="sf-icons" units-per-em="${EM}" ascent="${EM}" descent="0" />
 <missing-glyph horiz-adv-x="0" />
 <glyph glyph-name="service-fabric" unicode="&#xE001;" horiz-adv-x="${EM}" d="${glyph}" />
+<glyph glyph-name="service-fabric-seed-node" unicode="&#xE002;" horiz-adv-x="${EM}" d="${seedNode}" />
 </font>
 </defs>
 </svg>`;
@@ -84,4 +115,4 @@ const svgFont = `<?xml version="1.0" standalone="no"?>
 const ttf = svg2ttf(svgFont, { ts: 0, description: 'Service Fabric Tools icons', url: '' });
 const woff = ttf2woff(new Uint8Array(ttf.buffer));
 writeFileSync('media/sf-icons.woff', Buffer.from(woff.buffer ?? woff));
-console.log('Wrote media/sf-icons.woff (U+E001 service-fabric).');
+console.log('Wrote media/sf-icons.woff (U+E001 service-fabric, U+E002 service-fabric-seed-node).');

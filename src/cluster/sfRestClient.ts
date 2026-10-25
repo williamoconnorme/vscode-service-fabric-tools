@@ -14,6 +14,8 @@ export interface ClusterNodeInfo {
 	status: string;
 	healthState: string;
 	nodeType: string;
+	/** Whether the node is one of the cluster's seed nodes (absent when not reported). */
+	isSeedNode?: boolean;
 }
 
 /**
@@ -263,6 +265,7 @@ export class SfRestClient {
 			status: String(n?.NodeStatus ?? ''),
 			healthState: String(n?.HealthState ?? ''),
 			nodeType: String(n?.Type ?? ''),
+			isSeedNode: Boolean(n?.IsSeedNode),
 		}));
 	}
 

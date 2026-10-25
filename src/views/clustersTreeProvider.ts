@@ -796,8 +796,11 @@ function nodeItem(conn: ClusterConnection, n: ClusterNodeInfo): ClusterTreeItem 
 		nodeStatus: n.status,
 		raw: n,
 	}).withHealth(n.healthState);
-	item.description = `${n.status} • ${n.healthState}`;
-	item.tooltip = `Type: ${n.nodeType}\nStatus: ${n.status}\nHealth: ${n.healthState}`;
+	if (n.isSeedNode) {
+		// $(service-fabric-seed-node) is contributed by the extension (media/sf-icons.woff).
+		item.iconPath = new vscode.ThemeIcon('service-fabric-seed-node', healthColor(n.healthState));
+	}
+	item.tooltip = `Type: ${n.nodeType}${n.isSeedNode ? ' (seed node)' : ''}\nStatus: ${n.status}\nHealth: ${n.healthState}`;
 	return item;
 }
 

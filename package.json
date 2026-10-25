@@ -62,6 +62,13 @@
                     "fontPath": "media/sf-icons.woff",
                     "fontCharacter": "\\E001"
                 }
+            },
+            "service-fabric-seed-node": {
+                "description": "Service Fabric seed node",
+                "default": {
+                    "fontPath": "media/sf-icons.woff",
+                    "fontCharacter": "\\E002"
+                }
             }
         },
         "languages": [
@@ -109,13 +116,13 @@
                 {
                     "id": "serviceFabric.applications",
                     "name": "Applications",
-                    "icon": "$(package)",
+                    "icon": "media/view-applications.svg",
                     "contextualTitle": "Service Fabric"
                 },
                 {
                     "id": "serviceFabric.clusters",
                     "name": "Clusters",
-                    "icon": "$(server)",
+                    "icon": "media/view-clusters.svg",
                     "contextualTitle": "Service Fabric"
                 }
             ]
