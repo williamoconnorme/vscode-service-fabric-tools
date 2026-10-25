@@ -339,7 +339,7 @@ You can save any number of clusters. Click **+** (**Add Cluster…**) in the **C
 
 ### 7.1 Local cluster
 
-**Service Fabric: Connect to Local Cluster** registers the connection at `http://localhost:19080`. The connection is stored in workspace state and survives reloads.
+**Service Fabric: Connect to Local Cluster** registers the connection at `http://localhost:19080`. The connection is saved for all your workspaces (see §7.2, *Where connections are kept*).
 
 ### 7.2 Remote cluster
 
@@ -362,7 +362,7 @@ openssl pkcs12 -export -in admin.crt -inkey admin.key -out sf-admin.pfx -keypbe 
 
 Older PFX exports encrypted with RC2/3DES can't be read by current Node/OpenSSL; re-export them with AES as above.
 
-Connections are persisted **per workspace** so different repos can carry distinct cluster lists.
+**Where connections are kept.** Saved clusters (endpoint, label, Entra ID settings, pinned server certificate, client certificate path and thumbprint) are shared by **every workspace** on the machine: add a cluster once and it's in the Clusters view of every folder you open, and **Remove Cluster…** removes it everywhere. With Settings Sync on, they also sync to your other machines; turn that off with `serviceFabric.clusters.syncSavedClusters: false`. A synced client certificate path may not exist on another machine, and passphrases never sync, so you may be asked for the file or passphrase again there. Each workspace keeps its own **active cluster** (a new workspace starts with the one you used last), its own **Disconnect** state and the last probe results. Clusters saved per workspace by 1.2.x are moved into the shared list the first time each workspace opens.
 
 ### 7.3 Switching the active cluster
 
@@ -853,6 +853,7 @@ Idempotent — running it twice is safe; the second run reports zero consumers u
 | `serviceFabric.powerShell.executable` | `auto` | `auto` (Windows PowerShell on Windows), `pwsh`, or `powershell`. The SDK's PowerShell module only exists on Windows; on macOS / Linux Publish and Remove use the REST engine. |
 | `serviceFabric.clientCertificates` | `{}` | Client certificate files for X.509-secured clusters, keyed by the publish profile's `FindValue` (thumbprint, or subject name for `FindBySubjectName`). Values are `.pfx`/`.p12` or PEM paths; `~` expands to the home folder. Used by the REST engine. Passphrases are kept in SecretStorage. See §8.4. |
 | `serviceFabric.confirmDestructiveActions` | `true` | Confirm before Remove / Reset Local Cluster. |
+| `serviceFabric.clusters.syncSavedClusters` | `true` | Sync saved clusters between machines with Settings Sync (passphrases never sync). Saved clusters are always shared by every workspace on the machine. See §7.2. |
 | `serviceFabric.clusters.autoRefreshSeconds` | `30` | Clusters view auto-refresh interval while the view is visible and the window focused. `0` turns it off. See §3.2. |
 | `serviceFabric.tree.showDeploymentStatus` | `true` | Badge applications that are deployed on the active cluster. |
 | `serviceFabric.diagnostics.enableManifestRules` | `true` | Enable `SFD00x` rules. |

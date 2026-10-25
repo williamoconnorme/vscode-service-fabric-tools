@@ -1337,6 +1337,12 @@
                     "default": true,
                     "markdownDescription": "Show unhealthy applications and services of the active cluster in the **Problems** panel, on the `ApplicationManifest.xml` / `ServiceManifest.xml` they come from. Re-checked every minute while the window is focused."
                 },
+                "serviceFabric.clusters.syncSavedClusters": {
+                    "type": "boolean",
+                    "default": true,
+                    "scope": "application",
+                    "markdownDescription": "Sync saved clusters (endpoint, label, security settings and client certificate path) between machines with Settings Sync. Saved clusters are always shared by all workspaces on this machine; client certificate passphrases never sync."
+                },
                 "serviceFabric.clusters.autoRefreshSeconds": {
                     "type": "number",
                     "default": 30,

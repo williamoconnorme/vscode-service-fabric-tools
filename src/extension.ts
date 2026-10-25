@@ -102,6 +102,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	registerClientCertManager(new ClientCertManager(context.secrets, logger));
 	const connections = new ConnectionStore(context);
 	context.subscriptions.push(connections);
+	await connections.migrate();
 	const localCluster = new LocalClusterManager(connections, logger);
 	const clustersTree = new ClustersTreeProvider(connections, context.workspaceState);
 	const clustersView = vscode.window.createTreeView('serviceFabric.clusters', {
