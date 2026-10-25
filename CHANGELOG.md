@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.1
 
 - **Saved clusters are shared by all workspaces.** Add a cluster once and it's in every folder's Clusters view; with Settings Sync on it also reaches your other machines (setting **`serviceFabric.clusters.syncSavedClusters`**; passphrases never sync). Each workspace keeps its own active cluster (new ones start with the last used), Disconnect state and probe results. Clusters saved per workspace by 1.3.0 and earlier move into the shared list automatically.
 
