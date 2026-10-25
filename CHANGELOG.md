@@ -1,21 +1,36 @@
 # Changelog
 
-## Unreleased
+## 1.3.0
 
-- **Workspace Trust.** In Restricted Mode, commands that run MSBuild, NuGet or project scripts (build, restore, package, publish, remove, container images, scaffolding) are disabled and explain why; views, IntelliSense and validation keep working. Tool-path and certificate settings are read from user settings only until the workspace is trusted. Virtual workspaces are declared unsupported.
-- **Cluster health in Problems.** Unhealthy applications and services of the active cluster show on their `ApplicationManifest.xml` / `ServiceManifest.xml` (`SFH001`, `SFH002`), linking to Service Fabric Explorer, with **Show health** quick fixes. New setting **`serviceFabric.diagnostics.showClusterHealth`**.
-- **Outline, references and rename.** Manifests, parameter files and publish profiles get an outline, breadcrumbs and Go to Symbol. Find All References, Rename and Go to Definition work for application parameters (declaration, `[Name]` references, parameter files), service type names (manifests and the C# registration string) and service package names. F12 on a `[Parameter]` now actually goes to its declaration.
-- **Copilot / agent tools.** Read-only language model tools for the workspace's projects, saved clusters, cluster health, applications, an application's services/partitions/replicas, and EventStore events (`#sfProjects`, `#sfClusters`, `#sfHealth`, `#sfApps`, `#sfApp`, `#sfEvents`). VS Code 1.95+.
-- **Manifest CodeLens and inline values.** `ApplicationManifest.xml` gets **Publish…**, **Compare with *cluster*** (diff against the provisioned manifest; also for `ServiceManifest.xml` and from the editor menu), **History** and **Values: *file***. Inlay hints show each `[Parameter]`'s value from the chosen parameter file or the manifest default.
-- **Deployment history.** **Show Deployment History** lists an application's EventStore creates, upgrades (with versions), rollbacks, deletes, health reports and exits.
-- **Schema language status** shows whether IntelliSense uses the SDK's XSD or the bundled schema, and whether validation is on.
-- **Links.** `fabric:/…` names in terminals are clickable (Service Fabric Explorer, history, copy). `vscode://williamoconnor.service-fabric-tools/openCluster|openApplication|addCluster` links for runbooks; unknown clusters are only added through the usual prompts.
+Deeper VS Code integration: cluster health in the Problems panel, rename and references across manifests, Copilot tools, and a Clusters view that stays current on its own.
+
+### Clusters
+
+- **Auto-refresh.** While the Clusters view is visible and the window is focused, saved clusters are re-probed and expanded rows reloaded, so application, partition, replica and node states stay current. New setting **`serviceFabric.clusters.autoRefreshSeconds`** (default `30`, `0` = off). Nothing reloads while the view is hidden; pending refreshes run once when it's shown. Expanded rows stay expanded across refreshes.
+- **Disconnect keeps the cluster.** It used to delete the saved connection; now it keeps it (with its security settings) and stops probing it. New **Reconnect**. **Remove Cluster…** deletes a connection after confirming, from the right-click menu, an inline button on disconnected clusters, or the **Delete** key. Rows say `disconnected` or `unreachable`.
+- **Cluster health in the Problems panel.** The active cluster's unhealthy applications and services show on the `ApplicationManifest.xml` / `ServiceManifest.xml` they come from (`SFH001`, `SFH002`), linked to Service Fabric Explorer, with **Show health** quick fixes. Setting: **`serviceFabric.diagnostics.showClusterHealth`**.
+- **Deployment history.** **Show Deployment History** lists an application's creates, upgrades (with versions), rollbacks, deletes, health reports and exits from EventStore.
+- **Status bar** turns red for cluster health `Error`, yellow for `Warning` or an unreachable cluster.
+
+### Editing manifests
+
+- **Rename and Find All References** for application parameters (declaration, `[Name]` references, every parameter file), service type names (manifests and the C# registration string) and service package names. **F12** on a `[Parameter]` goes to its declaration; on a `ServiceTypeName`, to its service manifest.
+- **Outline, breadcrumbs and Go to Symbol** for manifests, `StartupServices.xml`, parameter files and publish profiles.
+- **CodeLens** on `ApplicationManifest.xml`: **Publish…**, **Compare with *cluster*** (diff against the manifest provisioned there; also on `ServiceManifest.xml` and the editor's right-click menu), **History**, and **Values: *file***.
+- **Inline parameter values.** Each `[Parameter]` shows the value it gets from the chosen parameter file, or the manifest default.
+- **Schema status** in the status bar's language area: SDK XSD or bundled schema, and whether validation is on.
+
+### Copilot and agents
+
+- Read-only **language model tools** for the workspace's projects, saved clusters, cluster health, applications, an application's services, partitions and replicas, and EventStore events: `#sfProjects`, `#sfClusters`, `#sfHealth`, `#sfApps`, `#sfApp`, `#sfEvents`. They never change a cluster or prompt for sign-in. VS Code 1.95 or later.
+
+### Workspace, links and remote
+
+- **Restricted Mode.** In an untrusted workspace, commands that run MSBuild, NuGet or project scripts (build, restore, package, publish, remove, container images, scaffolding) are disabled and explain why; views, IntelliSense and validation keep working. Tool-path and certificate settings come from user settings only until the workspace is trusted.
+- **Links.** `fabric:/…` names in terminals are clickable (Service Fabric Explorer, deployment history, copy). `vscode://williamoconnor.service-fabric-tools/openCluster`, `/openApplication` and `/addCluster` links for runbooks; a link never contacts a cluster that isn't saved.
+- **Remote development.** The extension runs on the workspace host (SSH, WSL, Dev Containers, Codespaces).
+- **Empty views.** The Applications view asks you to open a folder when none is open, shows that it's scanning, and offers **Create New Application** only with a folder open. Off Windows, the Clusters view offers only a remote connection.
 - **Output channel** lines are timestamped and coloured by level.
-- **Remote development.** The extension declares it runs on the workspace host (SSH, WSL, Dev Containers, Codespaces).
-- **Disconnect no longer deletes the cluster.** It keeps the saved connection (and its security settings) and stops probing it; new **Reconnect** probes it again. **Remove Cluster…** deletes a connection after confirming (honours `serviceFabric.confirmDestructiveActions`), from the right-click menu, an inline trash button on disconnected clusters, or the **Delete** key. Cluster rows say `disconnected` or `unreachable`.
-- **Clusters view auto-refresh.** New setting **`serviceFabric.clusters.autoRefreshSeconds`** (default `30`, `0` = off): while the view is visible and the window focused, saved clusters are re-probed and expanded rows reloaded, so application, partition, replica and node states stay current. Rows now have stable ids, so expanded branches stay expanded when a count in their label changes. Background probes only redraw the view when the cluster's state changed, and repeated probe failures are logged once. While the view is hidden nothing in it reloads; pending refreshes run once when it is shown.
-- **Status bar** turns red for cluster health `Error` and yellow for `Warning` or an unreachable cluster.
-- **Empty views.** The Applications view asks you to open a folder when none is open, says it's looking for projects during the first scan, and offers **Create New Application** only when a folder is open. Off Windows, the Clusters view offers only a remote connection.
 
 ## 1.2.1
 

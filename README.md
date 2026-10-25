@@ -12,6 +12,8 @@ Build, publish and debug Azure Service Fabric applications (`.sfproj`) in VS Cod
 - Opens any folder containing a `.sfproj` and shows applications, services, packages, endpoints, parameters and publish profiles in the **Service Fabric** view.
 - Built-in manifest IntelliSense: completion, hover docs and schema validation for application and service manifests. No XML extension needed.
 - Go to definition between manifests, parameter and version-drift diagnostics, and a "promote literal to parameter" quick fix.
+- Rename and Find All References for application parameters, service types and service packages; outline and breadcrumbs for every Service Fabric XML file.
+- Inline parameter values from the parameter file you choose, and a diff of any manifest against the version deployed on a cluster.
 - Encrypt secrets for `IsEncrypted` settings with the cluster's certificate, on any OS.
 
 **Scaffolding**
@@ -29,7 +31,10 @@ Build, publish and debug Azure Service Fabric applications (`.sfproj`) in VS Cod
 - Connect to any number of local and remote clusters: unsecured, certificate-pinned, X.509 client certificate, or Microsoft Entra ID (with Azure CLI sign-in).
 - A cluster explorer that mirrors Service Fabric Explorer: application types, applications, services, partitions, replicas, nodes, system services and repair jobs, coloured by health.
 - Right-click actions: scale or delete services, restart replicas and code packages, activate or deactivate nodes, read container logs, and resume, change or roll back upgrades in progress.
-- Diagnostic events viewer and a status-bar health indicator.
+- Diagnostic events viewer, deployment history, and a status-bar health indicator. The Clusters view refreshes itself while it's visible.
+- Unhealthy applications and services of the active cluster show in the Problems panel, on the manifests they come from.
+- Read-only tools for Copilot agent mode: ask about your projects, cluster health, applications, partitions and replicas, and recent events.
+- Works in Restricted Mode (browsing and IntelliSense only) and over Remote SSH, WSL, Dev Containers and Codespaces.
 
 **Local development (Windows)**
 - Start, stop, reset and switch the local dev cluster between 1-node and 5-node.
