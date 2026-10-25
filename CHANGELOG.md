@@ -1,12 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **Saved clusters are shared by all workspaces.** Add a cluster once and it's in every folder's Clusters view; with Settings Sync on it also reaches your other machines (setting **`serviceFabric.clusters.syncSavedClusters`**; passphrases never sync). Each workspace keeps its own active cluster (new ones start with the last used), Disconnect state and probe results. Clusters saved per workspace by 1.3.0 and earlier move into the shared list automatically.
+
 ## 1.3.0
 
 Deeper VS Code integration: cluster health in the Problems panel, rename and references across manifests, Copilot tools, and a Clusters view that stays current on its own.
 
 ### Clusters
 
-- **Saved clusters are shared by all workspaces.** Add a cluster once and it's in every folder's Clusters view; with Settings Sync on it also reaches your other machines (setting **`serviceFabric.clusters.syncSavedClusters`**; passphrases never sync). Each workspace keeps its own active cluster (new ones start with the last used), Disconnect state and probe results. Clusters saved per workspace by 1.2.x move into the shared list automatically.
 - **Auto-refresh.** While the Clusters view is visible and the window is focused, saved clusters are re-probed and expanded rows reloaded, so application, partition, replica and node states stay current. New setting **`serviceFabric.clusters.autoRefreshSeconds`** (default `30`, `0` = off). Nothing reloads while the view is hidden; pending refreshes run once when it's shown. Expanded rows stay expanded across refreshes.
 - **Disconnect keeps the cluster.** It used to delete the saved connection; now it keeps it (with its security settings) and stops probing it. New **Reconnect**. **Remove Cluster…** deletes a connection after confirming, from the right-click menu, an inline button on disconnected clusters, or the **Delete** key. Rows say `disconnected` or `unreachable`.
 - **Cluster health in the Problems panel.** The active cluster's unhealthy applications and services show on the `ApplicationManifest.xml` / `ServiceManifest.xml` they come from (`SFH001`, `SFH002`), linked to Service Fabric Explorer, with **Show health** quick fixes. Setting: **`serviceFabric.diagnostics.showClusterHealth`**.

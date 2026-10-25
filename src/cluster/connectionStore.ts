@@ -44,7 +44,7 @@ const LAST_ACTIVE_KEY = 'serviceFabric.lastActiveClusterId';
 /** `workspaceState`: this workspace's probe results and Disconnect flags, by cluster id. */
 const RUNTIME_KEY = 'serviceFabric.clusterState';
 const ACTIVE_KEY = 'serviceFabric.activeClusterId';
-/** `workspaceState`: where 1.2.x kept whole connections, per workspace. */
+/** `workspaceState`: where 1.3.0 and earlier kept whole connections, per workspace. */
 const LEGACY_KEY = 'serviceFabric.connections';
 
 /**

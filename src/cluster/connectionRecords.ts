@@ -30,7 +30,7 @@ export function mergeConnections(definitions: ClusterDefinition[], runtime: Reco
 }
 
 /**
- * Folds connections a workspace saved before clusters were shared (1.2.x) into the
+ * Folds connections a workspace saved before clusters were shared (1.3.0 and earlier) into the
  * shared definitions. A cluster already shared keeps its shared definition; the workspace's
  * probe state is kept either way.
  */
